@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl:*)",
+      "Bash(go:*)",
+      "Bash(git:*)",
+      "Bash(make:*)",
+      "Bash(rm:*)",
+      "Bash(mkdir:*)",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(sleep:*)",
+      "Bash(pkill:*)",
+      "Bash(kill:*)",
+      "Bash(wait:*)",
+      "Bash(timeout:*)",
+      "Bash(python3:*)",
+      "Bash(./torg:*)",
+      "Bash(sed:*)",
+      "Bash(grep:*)",
+      "Read(//home/gwilson/work/torg/**)",
+      "WebFetch(domain:github.com)",
+      "WebSearch"
+    ]
+  }
+}

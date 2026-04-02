@@ -1,0 +1,4 @@
+torg
+*.org
+*.meta.json
+!test.org
