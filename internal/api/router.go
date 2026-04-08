@@ -19,6 +19,14 @@ func Register(mux *http.ServeMux, store *orgfile.Store) {
 		h.getOutline(w, r)
 	})
 
+	mux.HandleFunc("/api/preamble", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.updatePreamble(w, r)
+	})
+
 	mux.HandleFunc("/api/nodes/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 

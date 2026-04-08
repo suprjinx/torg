@@ -19,13 +19,32 @@ func walkSections(sections []*org.Section, items *Items) {
 			continue
 		}
 		h := sec.Headline
-		*items = append(*items, Item{
+		item := Item{
 			Level:  h.Lvl,
 			Title:  inlineNodesToText(h.Title),
 			Status: h.Status,
 			Tags:   h.Tags,
-			Body:   extractBody(h.Children),
-		})
+		}
+		if h.Properties != nil && len(h.Properties.Properties) > 0 {
+			item.Properties = make(map[string]string, len(h.Properties.Properties))
+			for _, prop := range h.Properties.Properties {
+				if len(prop) >= 2 {
+					item.Properties[prop[0]] = prop[1]
+				}
+			}
+		}
+		*items = append(*items, item)
+
+		// Body text becomes a single item at parent level+1 with IsBody flag
+		body := extractBody(h.Children)
+		if body != "" {
+			*items = append(*items, Item{
+				Level:  h.Lvl + 1,
+				IsBody: true,
+				Title:  body,
+			})
+		}
+
 		walkSections(sec.Children, items)
 	}
 }
@@ -84,6 +103,8 @@ func extractBody(children []org.Node) string {
 	for _, child := range children {
 		switch child.(type) {
 		case org.Headline:
+			continue
+		case org.PropertyDrawer:
 			continue
 		default:
 			s := strings.TrimSpace(child.String())

@@ -1,14 +1,18 @@
 package model
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Item is a single outline entry in a flat ordered list.
 type Item struct {
-	Level  int      `json:"-"`
-	Title  string   `json:"title"`
-	Status string   `json:"status,omitempty"`
-	Tags   []string `json:"tags,omitempty"`
-	Body   string   `json:"body,omitempty"`
+	Level      int               `json:"-"`
+	IsBody     bool              `json:"-"`
+	Title      string            `json:"title"`
+	Status     string            `json:"status,omitempty"`
+	Tags       []string          `json:"tags,omitempty"`
+	Properties map[string]string `json:"properties,omitempty"`
 }
 
 // Items is the flat ordered list — the source of truth.
@@ -16,19 +20,23 @@ type Items []Item
 
 // Node is a tree node for the API response (derived from Items for display).
 type Node struct {
-	ID        string  `json:"id"`
-	Level     int     `json:"level"`
-	Title     string  `json:"title"`
-	Status    string  `json:"status,omitempty"`
-	Tags      []string `json:"tags,omitempty"`
-	Children  []*Node `json:"children"`
-	Collapsed bool    `json:"collapsed"`
+	ID         string            `json:"id"`
+	Level      int               `json:"level"`
+	IsBody     bool              `json:"isBody,omitempty"`
+	Title      string            `json:"title"`
+	Body       string            `json:"body,omitempty"`
+	Status     string            `json:"status,omitempty"`
+	Tags       []string          `json:"tags,omitempty"`
+	Properties map[string]string `json:"properties,omitempty"`
+	Children   []*Node           `json:"children"`
+	Collapsed  bool              `json:"collapsed"`
 }
 
 // Outline is the API response.
 type Outline struct {
-	Nodes   []*Node `json:"nodes"`
-	FocusID string  `json:"focusId,omitempty"`
+	Nodes    []*Node `json:"nodes"`
+	Preamble string  `json:"preamble,omitempty"`
+	FocusID  string  `json:"focusId,omitempty"`
 }
 
 // ToTree converts the flat list into a nested tree for display.
@@ -42,13 +50,15 @@ func (items Items) ToTree(collapsed map[string]bool) *Outline {
 	nodes := make([]*Node, len(items))
 	for i, item := range items {
 		nodes[i] = &Node{
-			ID:        fmt.Sprintf("%d", i),
-			Level:     item.Level,
-			Title:     item.Title,
-			Status:    item.Status,
-			Tags:      item.Tags,
-			Children:  []*Node{},
-			Collapsed: collapsed[fmt.Sprintf("%d", i)],
+			ID:         fmt.Sprintf("%d", i),
+			Level:      item.Level,
+			IsBody:     item.IsBody,
+			Title:      item.Title,
+			Status:     item.Status,
+			Tags:       item.Tags,
+			Properties: item.Properties,
+			Children:   []*Node{},
+			Collapsed:  collapsed[fmt.Sprintf("%d", i)],
 		}
 	}
 
@@ -70,7 +80,29 @@ func (items Items) ToTree(collapsed map[string]bool) *Outline {
 		stack = append(stack, n)
 	}
 
+	mergeBodyChildren(roots)
 	return &Outline{Nodes: roots}
+}
+
+// mergeBodyChildren collects body child nodes into the parent's Body field
+// and removes them from Children.
+func mergeBodyChildren(nodes []*Node) {
+	for _, n := range nodes {
+		var bodyLines []string
+		var headingChildren []*Node
+		for _, c := range n.Children {
+			if c.IsBody {
+				bodyLines = append(bodyLines, c.Title)
+			} else {
+				headingChildren = append(headingChildren, c)
+			}
+		}
+		if len(bodyLines) > 0 {
+			n.Body = strings.Join(bodyLines, "\n")
+		}
+		n.Children = headingChildren
+		mergeBodyChildren(n.Children)
+	}
 }
 
 // SubtreeEnd returns the exclusive end index of the subtree rooted at idx.

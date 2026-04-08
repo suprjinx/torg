@@ -1,8 +1,99 @@
+Here's some header material!
+Ignore 
+at your peril
 * Inbox
-** Buy groceries
-** Read chapter 5
+here's something else
+** some more items
+** another
+here's a note for me
+** back in the outline
+adding a body note
+*** new item 
+**** what's happ
+
+* Buy groceries
+Some notes about what to buy:
+- [x ] Milk
+- [ x] Eggs
+- [X] Bread
 * Projects
-** Build torg app
-*** Design API
+** Build tor
+:PROPERTIES:
+:DEADLINE: 2026-04-15
+:PRIORITY: high
+:END:
+Adding some additional. Are you staing here or going out? can i do new lines here?
+*** I want a new subitem
+:PROPERTIES:
+:AND: props
+:OR: props
+:END:
+Here's some body info
+I have multiple lines
+**** which also has a sub
+** Design API
+** Hows this?
+*** can i add some more here?
+*** here's another
+** with comment
+:PROPERTIES:
+:ADD: another
+:END:
 *** Implement frontend
+
+* Read chapter 5
+
 * Ideas
+Capture random thoughts here.
+* Read chapter 6
+
+* okay
+
+* getting
+
+* longer
+
+* now
+
+* how low
+
+* can
+
+* we
+
+* go
+
+* at the
+
+* end of
+** end of
+
+* the list
+
+* are
+
+* we
+
+* scrolling
+
+* or
+
+* whja
+
+* come on
+
+* tell me
+
+* what
+
+* will
+
+* happen
+
+* at
+
+* the
+
+* end
+
+* new item

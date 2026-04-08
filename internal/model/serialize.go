@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -9,9 +10,19 @@ import (
 func (items Items) ToOrg() string {
 	var b strings.Builder
 	prevLevel := 0
+	prevIsBody := false
 	for _, item := range items {
+		if item.IsBody {
+			for _, line := range strings.Split(item.Title, "\n") {
+				b.WriteString(line)
+				b.WriteString("\n")
+			}
+			prevIsBody = true
+			continue
+		}
+
 		// Blank line before top-level headings (except the first)
-		if item.Level <= prevLevel && item.Level == 1 && b.Len() > 0 {
+		if !prevIsBody && item.Level <= prevLevel && item.Level == 1 && b.Len() > 0 {
 			b.WriteString("\n")
 		}
 
@@ -26,12 +37,22 @@ func (items Items) ToOrg() string {
 		}
 		b.WriteString("\n")
 
-		if item.Body != "" {
-			b.WriteString(item.Body)
-			b.WriteString("\n")
+		if len(item.Properties) > 0 {
+			b.WriteString(":PROPERTIES:\n")
+			// Sort keys for stable output
+			keys := make([]string, 0, len(item.Properties))
+			for k := range item.Properties {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fmt.Fprintf(&b, ":%s: %s\n", k, item.Properties[k])
+			}
+			b.WriteString(":END:\n")
 		}
 
 		prevLevel = item.Level
+		prevIsBody = false
 	}
 	return b.String()
 }

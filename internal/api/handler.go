@@ -20,11 +20,13 @@ func (h *handlers) items() model.Items {
 }
 
 func (h *handlers) save(items model.Items, focusIdx int) (*model.Outline, error) {
-	if err := h.store.Save(items.ToOrg()); err != nil {
+	content := h.store.Preamble() + items.ToOrg()
+	if err := h.store.Save(content); err != nil {
 		return nil, err
 	}
 	fresh := h.items()
 	outline := fresh.ToTree(h.store.Collapsed())
+	outline.Preamble = strings.TrimRight(h.store.Preamble(), "\n")
 	if focusIdx >= 0 && focusIdx < len(fresh) {
 		outline.FocusID = fmt.Sprintf("%d", focusIdx)
 	}
@@ -34,12 +36,16 @@ func (h *handlers) save(items model.Items, focusIdx int) (*model.Outline, error)
 func (h *handlers) getOutline(w http.ResponseWriter, r *http.Request) {
 	h.store.RLock()
 	defer h.store.RUnlock()
-	writeJSON(w, h.items().ToTree(h.store.Collapsed()))
+	outline := h.items().ToTree(h.store.Collapsed())
+	outline.Preamble = strings.TrimRight(h.store.Preamble(), "\n")
+	writeJSON(w, outline)
 }
 
 type updateReq struct {
-	Title     *string `json:"title"`
-	Collapsed *bool   `json:"collapsed"`
+	Title      *string            `json:"title"`
+	Body       *string            `json:"body"`
+	Properties *map[string]string `json:"properties"`
+	Collapsed  *bool              `json:"collapsed"`
 }
 
 func (h *handlers) updateNode(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +72,31 @@ func (h *handlers) updateNode(w http.ResponseWriter, r *http.Request) {
 	if req.Title != nil {
 		items[idx].Title = *req.Title
 	}
+	if req.Properties != nil {
+		if len(*req.Properties) == 0 {
+			items[idx].Properties = nil
+		} else {
+			items[idx].Properties = *req.Properties
+		}
+	}
+
+	if req.Body != nil {
+		bodyLevel := items[idx].Level + 1
+		bodyIdx := idx + 1
+		hasBody := bodyIdx < len(items) && items[bodyIdx].IsBody && items[bodyIdx].Level == bodyLevel
+
+		if *req.Body == "" {
+			if hasBody {
+				items = append(items[:bodyIdx], items[bodyIdx+1:]...)
+			}
+		} else {
+			if hasBody {
+				items[bodyIdx].Title = *req.Body
+			} else {
+				items = insert(items, bodyIdx, model.Item{Level: bodyLevel, IsBody: true, Title: *req.Body})
+			}
+		}
+	}
 
 	// Handle collapsed state via sidecar
 	if req.Collapsed != nil {
@@ -88,7 +119,8 @@ func (h *handlers) updateNode(w http.ResponseWriter, r *http.Request) {
 }
 
 type createReq struct {
-	Title string `json:"title"`
+	Title  string `json:"title"`
+	IsBody bool   `json:"isBody,omitempty"`
 }
 
 func (h *handlers) createChild(w http.ResponseWriter, r *http.Request) {
@@ -123,10 +155,19 @@ func (h *handlers) createChild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newItem := model.Item{Level: items[idx].Level + 1, Title: req.Title}
-	end := items.SubtreeEnd(idx)
-	// Insert at end of parent's subtree
-	insertIdx := end
+	newItem := model.Item{Level: items[idx].Level + 1, Title: req.Title, IsBody: req.IsBody}
+	var insertIdx int
+	if req.IsBody {
+		// Body items go right after the parent heading (before sub-headings)
+		insertIdx = idx + 1
+		// Skip past any existing body items
+		for insertIdx < len(items) && items[insertIdx].IsBody && items[insertIdx].Level == newItem.Level {
+			insertIdx++
+		}
+	} else {
+		// Regular children go at end of parent's subtree
+		insertIdx = items.SubtreeEnd(idx)
+	}
 	items = insert(items, insertIdx, newItem)
 
 	result, err2 := h.save(items, insertIdx)
@@ -160,7 +201,7 @@ func (h *handlers) createSibling(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newItem := model.Item{Level: items[idx].Level, Title: req.Title}
+	newItem := model.Item{Level: items[idx].Level, Title: req.Title, IsBody: items[idx].IsBody}
 	end := items.SubtreeEnd(idx)
 	items = insert(items, end, newItem)
 
@@ -245,6 +286,19 @@ func (h *handlers) moveNode(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "invalid action", http.StatusBadRequest)
 		return
+	}
+
+	// After indent, uncollapse the new parent so the item stays visible
+	if req.Action == "indent" {
+		parentIdx := items.ParentIdx(newIdx)
+		if parentIdx >= 0 {
+			collapsed := h.store.Collapsed()
+			parentId := fmt.Sprintf("%d", parentIdx)
+			if collapsed[parentId] {
+				delete(collapsed, parentId)
+				h.store.SaveMeta(collapsed)
+			}
+		}
 	}
 
 	result, err2 := h.save(items, newIdx)
@@ -415,4 +469,32 @@ func extractSeg(path, prefix, suffix string) string {
 	s := strings.TrimPrefix(path, prefix)
 	s = strings.TrimSuffix(s, suffix)
 	return s
+}
+
+func (h *handlers) updatePreamble(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	h.store.Lock()
+	defer h.store.Unlock()
+
+	// Normalize: ensure trailing newline if non-empty
+	preamble := req.Text
+	if preamble != "" && !strings.HasSuffix(preamble, "\n") {
+		preamble += "\n"
+	}
+	h.store.SetPreamble(preamble)
+
+	items := h.items()
+	result, err := h.save(items, -1)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, result)
 }

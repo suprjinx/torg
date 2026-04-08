@@ -17,6 +17,7 @@ type Store struct {
 	mu       sync.RWMutex
 	doc      *org.Document
 	meta     Meta
+	preamble string // text before the first heading, preserved on save
 }
 
 // Meta holds UI state that doesn't belong in the org file.
@@ -53,6 +54,9 @@ func (s *Store) loadLocked() error {
 	} else if err != nil {
 		return err
 	}
+
+	// Extract preamble (everything before the first heading line)
+	s.preamble = extractPreamble(string(data))
 
 	conf := org.New()
 	s.doc = conf.Parse(strings.NewReader(string(data)), s.path)
@@ -97,4 +101,23 @@ func (s *Store) RLock()   { s.mu.RLock() }
 func (s *Store) RUnlock() { s.mu.RUnlock() }
 func (s *Store) Lock()    { s.mu.Lock() }
 func (s *Store) Unlock()  { s.mu.Unlock() }
-func (s *Store) Path() string { return s.path }
+func (s *Store) Path() string     { return s.path }
+func (s *Store) Preamble() string { return s.preamble }
+func (s *Store) SetPreamble(p string) {
+	s.preamble = p
+}
+
+// extractPreamble returns all text before the first org heading line,
+// including the trailing newline so it can be directly prepended to heading output.
+func extractPreamble(content string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if len(line) > 0 && line[0] == '*' {
+			if i == 0 {
+				return ""
+			}
+			return strings.Join(lines[:i], "\n") + "\n"
+		}
+	}
+	return content // no headings at all
+}

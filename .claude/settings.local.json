@@ -20,7 +20,8 @@
       "Bash(grep:*)",
       "Read(//home/gwilson/work/torg/**)",
       "WebFetch(domain:github.com)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(/tmp/torg-test -file test.org -addr :8081)"
     ]
   }
 }

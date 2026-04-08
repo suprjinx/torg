@@ -51,7 +51,46 @@ function flattenVisible(nodes) {
   return result;
 }
 
+function updateNodeField(nodes, nodeId, field, value) {
+  const update = (list) =>
+    list.map((n) => {
+      if (n.id === nodeId) return { ...n, [field]: value };
+      if (n.children?.length > 0) return { ...n, children: update(n.children) };
+      return n;
+    });
+  return update(nodes);
+}
+
+function findNode(nodes, id) {
+  for (const n of nodes) {
+    if (n.id === id) return n;
+    if (n.children?.length > 0) {
+      const found = findNode(n.children, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 // --- Components ---
+
+function PreambleRow({ focused, dispatch, inputRefs }) {
+  const isFocused = focused;
+  return html`
+    <div className=${"node-row preamble-row" + (isFocused ? " focused" : "")}
+         onClick=${() => dispatch("preamble", "focus")}
+         ref=${(el) => { if (el) inputRefs.current["preamble"] = el; }}
+         tabIndex="0"
+         onFocus=${() => dispatch("preamble", "focus")}
+         onKeyDown=${(e) => {
+           if (e.key === "ArrowDown") { e.preventDefault(); dispatch("preamble", "nav-down"); }
+           if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); dispatch("preamble", "focus-body"); }
+         }}>
+      <span className="preamble-icon">\u00B6</span>
+      <span className="preamble-label">Preamble</span>
+    </div>
+  `;
+}
 
 function OutlineNode({ node, focusedId, dispatch, inputRefs, depth }) {
   const isFocused = focusedId === node.id;
@@ -94,6 +133,125 @@ function OutlineNode({ node, focusedId, dispatch, inputRefs, depth }) {
   `;
 }
 
+function PropertiesEditor({ nodeId, properties, dispatch }) {
+  const entries = Object.entries(properties || {});
+  const [newKey, setNewKey] = useState("");
+  const [newVal, setNewVal] = useState("");
+
+  return html`
+    <div className="props-editor">
+      ${entries.map(([k, v]) => html`
+        <div className="prop-row" key=${k}>
+          <span className="prop-key">${k}</span>
+          <input
+            className="prop-value"
+            value=${v}
+            onChange=${(e) => {
+              const updated = { ...properties, [k]: e.target.value };
+              dispatch(nodeId, "update-properties", updated);
+            }}
+          />
+          <button className="prop-delete"
+                  onClick=${() => {
+                    const updated = { ...properties };
+                    delete updated[k];
+                    dispatch(nodeId, "update-properties", updated);
+                  }}
+                  title="Remove property">\u00D7</button>
+        </div>
+      `)}
+      <div className="prop-row prop-add">
+        <input className="prop-key-input" placeholder="key"
+               value=${newKey} onChange=${(e) => setNewKey(e.target.value)} />
+        <input className="prop-value" placeholder="value"
+               value=${newVal} onChange=${(e) => setNewVal(e.target.value)} />
+        <button className="prop-add-btn"
+                onClick=${() => {
+                  if (newKey.trim()) {
+                    const updated = { ...properties, [newKey.trim()]: newVal };
+                    dispatch(nodeId, "update-properties", updated);
+                    setNewKey("");
+                    setNewVal("");
+                  }
+                }}
+                title="Add property">+</button>
+      </div>
+    </div>
+  `;
+}
+
+function DetailPane({ node, isPreamble, dispatch, inputRefs, bodyTextareaRef }) {
+  const bodySource = isPreamble ? (node?.body || "") : (node?.body || "");
+  const [bodyText, setBodyText] = useState(bodySource);
+  const localRef = useRef(null);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    const ta = localRef.current;
+    if (ta) {
+      ta.style.height = "auto";
+      ta.style.height = ta.scrollHeight + "px";
+    }
+  }, [bodyText]);
+
+  if (!node && !isPreamble) {
+    return html`
+      <div className="detail-pane">
+        <div className="detail-empty">Select an item to see details</div>
+      </div>
+    `;
+  }
+
+  const handleBodyChange = (e) => {
+    setBodyText(e.target.value);
+    if (isPreamble) {
+      dispatch("preamble", "change-preamble", e.target.value);
+    } else {
+      dispatch(node.id, "change-body", e.target.value);
+    }
+  };
+
+  const handleBodyKeyDown = (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      const targetId = isPreamble ? "preamble" : node?.id;
+      dispatch(targetId, "focus-outline");
+    }
+  };
+
+  const title = isPreamble ? "Preamble" : (node?.title || "Untitled");
+
+  return html`
+    <div className="detail-pane">
+      <div className="detail-header">${title}</div>
+      <div className="detail-section">
+        <label className="detail-label">${isPreamble ? "Content" : "Body"}</label>
+        <textarea
+          ref=${(el) => {
+            localRef.current = el;
+            if (bodyTextareaRef) bodyTextareaRef.current = el;
+          }}
+          className="detail-body"
+          value=${bodyText}
+          placeholder=${isPreamble ? "File header, #+TITLE, etc..." : "Add notes..."}
+          onChange=${handleBodyChange}
+          onKeyDown=${handleBodyKeyDown}
+        />
+      </div>
+      ${!isPreamble && html`
+        <div className="detail-section">
+          <label className="detail-label">Properties</label>
+          <${PropertiesEditor}
+            nodeId=${node.id}
+            properties=${node.properties}
+            dispatch=${dispatch}
+          />
+        </div>
+      `}
+    </div>
+  `;
+}
+
 function handleKey(e, id, dispatch) {
   const alt = e.altKey;
   const shift = e.shiftKey;
@@ -113,6 +271,9 @@ function handleKey(e, id, dispatch) {
   if (key === "ArrowUp")   { e.preventDefault(); dispatch(id, "nav-up"); return; }
   if (key === "ArrowDown") { e.preventDefault(); dispatch(id, "nav-down"); return; }
 
+  // Shift+Enter: focus body textarea in detail pane
+  if (key === "Enter" && shift) { e.preventDefault(); dispatch(id, "focus-body"); return; }
+
   // Enter: new sibling
   if (key === "Enter" && !shift) { e.preventDefault(); dispatch(id, "new-sibling"); return; }
 
@@ -122,12 +283,18 @@ function handleKey(e, id, dispatch) {
 
 function App() {
   const [nodes, setNodes] = useState(null);
+  const [preamble, setPreamble] = useState("");
   const [focusedId, setFocusedId] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
   const pendingFocusRef = useRef(null);
   const inputRefs = useRef({});
   const pendingTitle = useRef({});
+  const pendingBody = useRef({});
+  const pendingPreamble = useRef(null);
   const saveTimers = useRef({});
+  const bodyTimers = useRef({});
+  const preambleTimer = useRef(null);
+  const bodyTextareaRef = useRef(null);
 
   // Global Ctrl+H handler
   useEffect(() => {
@@ -150,7 +317,9 @@ function App() {
         const el = inputRefs.current[id];
         if (el) {
           el.focus();
-          el.selectionStart = el.selectionEnd = el.value.length;
+          if (el.setSelectionRange) {
+            el.selectionStart = el.selectionEnd = el.value?.length || 0;
+          }
         }
       });
     }
@@ -163,7 +332,7 @@ function App() {
 
   const applyResult = useCallback((data, focusId) => {
     setNodes(data.nodes || []);
-    // Server-provided focusId takes precedence, then explicit param
+    if (data.preamble !== undefined) setPreamble(data.preamble || "");
     const target = data.focusId || focusId;
     if (target) focusNode(target);
   }, [focusNode]);
@@ -173,6 +342,7 @@ function App() {
     api.get("/api/outline").then((data) => {
       const n = data.nodes || [];
       setNodes(n);
+      setPreamble(data.preamble || "");
       const flat = flattenVisible(n);
       if (flat.length > 0) focusNode(flat[0].id);
     });
@@ -191,6 +361,34 @@ function App() {
     }, 400);
   }, []);
 
+  // Debounced body save
+  const saveBody = useCallback((nodeId, body) => {
+    if (bodyTimers.current[nodeId]) clearTimeout(bodyTimers.current[nodeId]);
+    bodyTimers.current[nodeId] = setTimeout(async () => {
+      try {
+        const data = await api.put(`/api/nodes/${nodeId}`, { body });
+        delete pendingBody.current[nodeId];
+        setNodes(data.nodes || []);
+      } catch (err) {
+        console.error("body save failed:", err);
+      }
+    }, 400);
+  }, []);
+
+  // Debounced preamble save
+  const savePreamble = useCallback((text) => {
+    if (preambleTimer.current) clearTimeout(preambleTimer.current);
+    preambleTimer.current = setTimeout(async () => {
+      try {
+        const data = await api.put("/api/preamble", { text });
+        pendingPreamble.current = null;
+        setNodes(data.nodes || []);
+      } catch (err) {
+        console.error("preamble save failed:", err);
+      }
+    }, 400);
+  }, []);
+
   const flushSave = useCallback(async (nodeId) => {
     if (saveTimers.current[nodeId]) {
       clearTimeout(saveTimers.current[nodeId]);
@@ -203,8 +401,33 @@ function App() {
     }
   }, []);
 
+  const flushBody = useCallback(async () => {
+    for (const nodeId of Object.keys(bodyTimers.current)) {
+      clearTimeout(bodyTimers.current[nodeId]);
+      delete bodyTimers.current[nodeId];
+    }
+    for (const nodeId of Object.keys(pendingBody.current)) {
+      const body = pendingBody.current[nodeId];
+      delete pendingBody.current[nodeId];
+      await api.put(`/api/nodes/${nodeId}`, { body });
+    }
+  }, []);
+
+  const flushPreamble = useCallback(async () => {
+    if (preambleTimer.current) {
+      clearTimeout(preambleTimer.current);
+      preambleTimer.current = null;
+    }
+    if (pendingPreamble.current !== null) {
+      const text = pendingPreamble.current;
+      pendingPreamble.current = null;
+      await api.put("/api/preamble", { text });
+    }
+  }, []);
+
   const dispatch = useCallback(async (nodeId, action, value) => {
-    const flat = flattenVisible(nodes);
+    // Build flat list with preamble as first entry for navigation
+    const flat = [{ id: "preamble" }, ...flattenVisible(nodes)];
     const idx = flat.findIndex((n) => n.id === nodeId);
 
     if (action === "focus") {
@@ -212,18 +435,43 @@ function App() {
       return;
     }
 
+    if (action === "focus-outline") {
+      setFocusedId(nodeId);
+      requestAnimationFrame(() => {
+        const el = inputRefs.current[nodeId];
+        if (el) {
+          el.focus();
+          if (el.setSelectionRange) {
+            el.selectionStart = el.selectionEnd = el.value?.length || 0;
+          }
+        }
+      });
+      return;
+    }
+
     if (action === "change") {
       pendingTitle.current[nodeId] = value;
-      setNodes((prev) => {
-        const update = (list) =>
-          list.map((n) => {
-            if (n.id === nodeId) return { ...n, title: value };
-            if (n.children?.length > 0) return { ...n, children: update(n.children) };
-            return n;
-          });
-        return update(prev);
-      });
+      setNodes((prev) => updateNodeField(prev, nodeId, "title", value));
       saveTitle(nodeId, value);
+      return;
+    }
+
+    if (action === "change-body") {
+      pendingBody.current[nodeId] = value;
+      saveBody(nodeId, value);
+      return;
+    }
+
+    if (action === "change-preamble") {
+      pendingPreamble.current = value;
+      savePreamble(value);
+      return;
+    }
+
+    if (action === "focus-body") {
+      if (bodyTextareaRef.current) {
+        bodyTextareaRef.current.focus();
+      }
       return;
     }
 
@@ -237,7 +485,11 @@ function App() {
       return;
     }
 
+    // Preamble doesn't support structural ops
+    if (nodeId === "preamble") return;
+
     if (action === "toggle") {
+      await flushSave(nodeId);
       const node = flat.find((n) => n.id === nodeId);
       if (!node) return;
       const data = await api.put(`/api/nodes/${nodeId}`, { collapsed: !node.collapsed });
@@ -245,8 +497,10 @@ function App() {
       return;
     }
 
-    // Structural ops — flush pending save first
+    // Structural ops — flush pending saves first
     await flushSave(nodeId);
+    await flushBody();
+    await flushPreamble();
 
     if (action === "new-sibling") {
       const data = await api.post(`/api/nodes/${nodeId}/sibling`, { title: "" });
@@ -261,25 +515,51 @@ function App() {
       return;
     }
 
+    if (action === "update-properties") {
+      const data = await api.put(`/api/nodes/${nodeId}`, { properties: value });
+      setNodes(data.nodes || []);
+      return;
+    }
+
     if (["indent", "outdent", "move-up", "move-down"].includes(action)) {
       const data = await api.post(`/api/nodes/${nodeId}/move`, { action });
       applyResult(data);
     }
-  }, [nodes, saveTitle, flushSave, focusNode, applyResult]);
+  }, [nodes, saveTitle, saveBody, savePreamble, flushSave, flushBody, flushPreamble, focusNode, applyResult]);
 
   if (nodes === null) return html`<div className="empty">Loading...</div>`;
+
+  const isPreambleFocused = focusedId === "preamble";
+  const focusedNode = (!isPreambleFocused && focusedId) ? findNode(nodes, focusedId) : null;
+
+  // Build detail pane props
+  const detailNode = isPreambleFocused ? { body: preamble } : focusedNode;
+  const detailKey = isPreambleFocused ? "preamble" : focusedId;
 
   if (nodes.length === 0) {
     return html`
       <div>
         <${Header} onHelp=${() => setShowHelp(true)} />
-        <div className="empty"
-             onClick=${async () => {
-               const data = await api.post("/api/nodes/root/children", { title: "" });
-               const flat = flattenVisible(data.nodes || []);
-               applyResult(data, flat[0]?.id);
-             }}>
-          Click or press any key to start
+        <div className="app-layout">
+          <div className="outline-pane">
+            <${PreambleRow} focused=${isPreambleFocused} dispatch=${dispatch} inputRefs=${inputRefs} />
+            <div className="empty"
+                 onClick=${async () => {
+                   const data = await api.post("/api/nodes/root/children", { title: "" });
+                   const flat = flattenVisible(data.nodes || []);
+                   applyResult(data, flat[0]?.id);
+                 }}>
+              Click or press any key to start
+            </div>
+          </div>
+          <${DetailPane}
+            key=${detailKey}
+            node=${detailNode}
+            isPreamble=${isPreambleFocused}
+            dispatch=${dispatch}
+            inputRefs=${inputRefs}
+            bodyTextareaRef=${bodyTextareaRef}
+          />
         </div>
         <${Hints} />
       </div>
@@ -290,18 +570,31 @@ function App() {
     <div>
       <${Header} onHelp=${() => setShowHelp(true)} />
       ${showHelp && html`<${HelpPanel} onClose=${() => setShowHelp(false)} />`}
-      ${nodes.map(
-        (node) => html`
-          <${OutlineNode}
-            key=${node.id}
-            node=${node}
-            focusedId=${focusedId}
-            dispatch=${dispatch}
-            inputRefs=${inputRefs}
-            depth=${0}
-          />
-        `
-      )}
+      <div className="app-layout">
+        <div className="outline-pane">
+          <${PreambleRow} focused=${isPreambleFocused} dispatch=${dispatch} inputRefs=${inputRefs} />
+          ${nodes.map(
+            (node) => html`
+              <${OutlineNode}
+                key=${node.id}
+                node=${node}
+                focusedId=${focusedId}
+                dispatch=${dispatch}
+                inputRefs=${inputRefs}
+                depth=${0}
+              />
+            `
+          )}
+        </div>
+        <${DetailPane}
+          key=${detailKey}
+          node=${detailNode}
+          isPreamble=${isPreambleFocused}
+          dispatch=${dispatch}
+          inputRefs=${inputRefs}
+          bodyTextareaRef=${bodyTextareaRef}
+        />
+      </div>
       <${Hints} />
     </div>
   `;
@@ -330,19 +623,21 @@ function HelpPanel({ onClose }) {
       <div className="help-panel" onClick=${(e) => e.stopPropagation()}>
         <div className="help-header">
           <h2>Keyboard shortcuts</h2>
-          <button className="help-close" onClick=${onClose}>×</button>
+          <button className="help-close" onClick=${onClose}>\u00D7</button>
         </div>
         <div className="help-body">
           <${HelpSection} title="Navigation">
-            <${HelpRow} keys="↑ / ↓" desc="Move between items" />
+            <${HelpRow} keys="\u2191 / \u2193" desc="Move between items" />
             <${HelpRow} keys="Enter" desc="Create new item below" />
+            <${HelpRow} keys="Shift + Enter" desc="Focus body / preamble text" />
+            <${HelpRow} keys="Escape" desc="Return to outline" />
             <${HelpRow} keys="Backspace" desc="Delete empty item" />
           <//>
           <${HelpSection} title="Structure">
-            <${HelpRow} keys="Alt + ←" desc="Outdent (promote)" />
-            <${HelpRow} keys="Alt + →" desc="Indent (demote)" />
-            <${HelpRow} keys="Alt + ↑" desc="Move item up" />
-            <${HelpRow} keys="Alt + ↓" desc="Move item down" />
+            <${HelpRow} keys="Alt + \u2190" desc="Outdent (promote)" />
+            <${HelpRow} keys="Alt + \u2192" desc="Indent (demote)" />
+            <${HelpRow} keys="Alt + \u2191" desc="Move item up" />
+            <${HelpRow} keys="Alt + \u2193" desc="Move item down" />
           <//>
           <${HelpSection} title="Folding">
             <${HelpRow} keys="Tab" desc="Fold / unfold children" />
@@ -379,11 +674,12 @@ function HelpRow({ keys, desc }) {
 function Hints() {
   return html`
     <div className="hints">
-      <span><kbd>↑↓</kbd> navigate</span>
+      <span><kbd>\u2191\u2193</kbd> navigate</span>
       <span><kbd>Enter</kbd> new</span>
+      <span><kbd>Shift+Enter</kbd> body</span>
       <span><kbd>Tab</kbd> fold</span>
-      <span><kbd>Alt+←→</kbd> indent</span>
-      <span><kbd>Alt+↑↓</kbd> move</span>
+      <span><kbd>Alt+\u2190\u2192</kbd> indent</span>
+      <span><kbd>Alt+\u2191\u2193</kbd> move</span>
       <span><kbd>Ctrl+H</kbd> help</span>
     </div>
   `;
