@@ -1,3 +1,5 @@
+#+TORG_VERSION: 28
+
 Here's some header material!
 Ignore 
 at your peril
@@ -8,8 +10,7 @@ here's something else
 here's a note for me
 ** back in the outline
 adding a body note
-*** new item 
-**** what's happ
+*** new item
 
 * Buy groceries
 Some notes about what to buy:
@@ -40,60 +41,3 @@ I have multiple lines
 :ADD: another
 :END:
 *** Implement frontend
-
-* Read chapter 5
-
-* Ideas
-Capture random thoughts here.
-* Read chapter 6
-
-* okay
-
-* getting
-
-* longer
-
-* now
-
-* how low
-
-* can
-
-* we
-
-* go
-
-* at the
-
-* end of
-** end of
-
-* the list
-
-* are
-
-* we
-
-* scrolling
-
-* or
-
-* whja
-
-* come on
-
-* tell me
-
-* what
-
-* will
-
-* happen
-
-* at
-
-* the
-
-* end
-
-* new item

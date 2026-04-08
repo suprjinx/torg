@@ -12,30 +12,27 @@ const api = {
     if (!r.ok) throw new Error(`${r.status}`);
     return r.json();
   },
-  async post(path, body) {
-    const r = await fetch(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) throw new Error(`${r.status}`);
-    return r.json();
-  },
   async put(path, body) {
     const r = await fetch(path, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!r.ok) throw new Error(`${r.status}`);
-    return r.json();
-  },
-  async del(path) {
-    const r = await fetch(path, { method: "DELETE" });
+    if (r.status === 409) {
+      const data = await r.json();
+      throw Object.assign(new Error("conflict"), { conflict: true, serverVersion: data.version });
+    }
     if (!r.ok) throw new Error(`${r.status}`);
     return r.json();
   },
 };
+
+// --- Local ID generator ---
+
+let _nextId = 1;
+function newId() {
+  return `n${_nextId++}`;
+}
 
 // --- Tree helpers ---
 
@@ -51,16 +48,6 @@ function flattenVisible(nodes) {
   return result;
 }
 
-function updateNodeField(nodes, nodeId, field, value) {
-  const update = (list) =>
-    list.map((n) => {
-      if (n.id === nodeId) return { ...n, [field]: value };
-      if (n.children?.length > 0) return { ...n, children: update(n.children) };
-      return n;
-    });
-  return update(nodes);
-}
-
 function findNode(nodes, id) {
   for (const n of nodes) {
     if (n.id === id) return n;
@@ -72,12 +59,144 @@ function findNode(nodes, id) {
   return null;
 }
 
+function newNode(title = "") {
+  return {
+    id: newId(),
+    title,
+    body: "",
+    status: "",
+    tags: [],
+    properties: {},
+    children: [],
+    collapsed: false,
+  };
+}
+
+// Deep-clone a tree, updating a single node field
+function updateNodeField(nodes, nodeId, field, value) {
+  return nodes.map((n) => {
+    if (n.id === nodeId) return { ...n, [field]: value };
+    if (n.children?.length > 0) return { ...n, children: updateNodeField(n.children, nodeId, field, value) };
+    return n;
+  });
+}
+
+// Find parent + index of a node within the tree
+function findParentInfo(nodes, id, parent = null, parentList = null) {
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodes[i].id === id) return { parent, parentList: nodes, index: i };
+    if (nodes[i].children?.length > 0) {
+      const found = findParentInfo(nodes[i].children, id, nodes[i], nodes[i].children);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// Insert a new sibling after a node (after its subtree position)
+function insertSiblingAfter(nodes, afterId) {
+  const nn = newNode();
+  return { nodes: insertAfter(nodes, afterId, nn), newId: nn.id };
+}
+
+function insertAfter(nodes, afterId, newNode) {
+  const result = [];
+  for (const n of nodes) {
+    if (n.id === afterId) {
+      result.push({ ...n, children: n.children ? [...n.children] : [] });
+      result.push(newNode);
+    } else {
+      const updatedChildren = n.children?.length > 0 ? insertAfter(n.children, afterId, newNode) : n.children;
+      result.push(updatedChildren !== n.children ? { ...n, children: updatedChildren } : n);
+    }
+  }
+  return result;
+}
+
+// Remove a node from the tree
+function removeNode(nodes, id) {
+  const result = [];
+  for (const n of nodes) {
+    if (n.id === id) continue;
+    const updatedChildren = n.children?.length > 0 ? removeNode(n.children, id) : n.children;
+    result.push(updatedChildren !== n.children ? { ...n, children: updatedChildren } : n);
+  }
+  return result;
+}
+
+// Indent: make node a child of its previous sibling
+function indentNode(nodes, id) {
+  const info = findParentInfo(nodes, id);
+  if (!info || info.index === 0) return nodes; // can't indent first child
+
+  const prevSibling = info.parentList[info.index - 1];
+  const node = info.parentList[info.index];
+
+  // Remove node from current position
+  let result = removeNode(nodes, id);
+  // Append to previous sibling's children and uncollapse it
+  result = mapNode(result, prevSibling.id, (n) => ({
+    ...n,
+    collapsed: false,
+    children: [...(n.children || []), { ...node }],
+  }));
+  return result;
+}
+
+// Outdent: move node to be a sibling of its parent (after parent)
+function outdentNode(nodes, id) {
+  const info = findParentInfo(nodes, id);
+  if (!info || !info.parent) return nodes; // already at root
+
+  const node = info.parentList[info.index];
+  // Remove from current parent
+  let result = removeNode(nodes, id);
+  // Insert after the parent
+  result = insertAfter(result, info.parent.id, { ...node });
+  return result;
+}
+
+// Move node up within its siblings
+function moveNodeUp(nodes, id) {
+  const info = findParentInfo(nodes, id);
+  if (!info || info.index === 0) return nodes;
+
+  const list = [...info.parentList];
+  [list[info.index - 1], list[info.index]] = [list[info.index], list[info.index - 1]];
+
+  if (!info.parent) return list;
+  return mapNode(nodes, info.parent.id, (n) => ({ ...n, children: list }));
+}
+
+// Move node down within its siblings
+function moveNodeDown(nodes, id) {
+  const info = findParentInfo(nodes, id);
+  if (!info || info.index >= info.parentList.length - 1) return nodes;
+
+  const list = [...info.parentList];
+  [list[info.index], list[info.index + 1]] = [list[info.index + 1], list[info.index]];
+
+  if (!info.parent) return list;
+  return mapNode(nodes, info.parent.id, (n) => ({ ...n, children: list }));
+}
+
+// Apply a transform to a specific node by ID
+function mapNode(nodes, id, fn) {
+  return nodes.map((n) => {
+    if (n.id === id) return fn(n);
+    if (n.children?.length > 0) {
+      const updated = mapNode(n.children, id, fn);
+      return updated !== n.children ? { ...n, children: updated } : n;
+    }
+    return n;
+  });
+}
+
 // --- Components ---
 
 function PreambleRow({ focused, dispatch, inputRefs }) {
-  const isFocused = focused;
   return html`
-    <div className=${"node-row preamble-row" + (isFocused ? " focused" : "")}
+    <div className=${"node-row preamble-row" + (focused ? " focused" : "")}
          onClick=${() => dispatch("preamble", "focus")}
          ref=${(el) => { if (el) inputRefs.current["preamble"] = el; }}
          tabIndex="0"
@@ -257,44 +376,67 @@ function handleKey(e, id, dispatch) {
   const shift = e.shiftKey;
   const key = e.key;
 
-  // Alt+Arrow: move node or indent/outdent (org-mode style)
   if (alt && key === "ArrowUp")    { e.preventDefault(); dispatch(id, "move-up"); return; }
   if (alt && key === "ArrowDown")  { e.preventDefault(); dispatch(id, "move-down"); return; }
   if (alt && key === "ArrowRight") { e.preventDefault(); dispatch(id, "indent"); return; }
   if (alt && key === "ArrowLeft")  { e.preventDefault(); dispatch(id, "outdent"); return; }
 
-  // Tab / Shift-Tab: fold/unfold
   if (key === "Tab" && !shift) { e.preventDefault(); dispatch(id, "toggle"); return; }
   if (key === "Tab" && shift)  { e.preventDefault(); dispatch(id, "toggle"); return; }
 
-  // Navigation
   if (key === "ArrowUp")   { e.preventDefault(); dispatch(id, "nav-up"); return; }
   if (key === "ArrowDown") { e.preventDefault(); dispatch(id, "nav-down"); return; }
 
-  // Shift+Enter: focus body textarea in detail pane
   if (key === "Enter" && shift) { e.preventDefault(); dispatch(id, "focus-body"); return; }
-
-  // Enter: new sibling
   if (key === "Enter" && !shift) { e.preventDefault(); dispatch(id, "new-sibling"); return; }
 
-  // Backspace on empty: delete
   if (key === "Backspace" && e.target.value === "") { e.preventDefault(); dispatch(id, "delete"); return; }
+}
+
+// --- Sync status labels ---
+const SYNC_SAVED = "saved";
+const SYNC_DIRTY = "unsaved";
+const SYNC_SAVING = "saving";
+const SYNC_ERROR = "error";
+const SYNC_CONFLICT = "conflict";
+
+function SyncIndicator({ status }) {
+  const labels = {
+    [SYNC_SAVED]: "Saved",
+    [SYNC_DIRTY]: "Unsaved changes",
+    [SYNC_SAVING]: "Saving\u2026",
+    [SYNC_ERROR]: "Save failed \u2014 retrying",
+    [SYNC_CONFLICT]: "Conflict! Reload needed",
+  };
+  const cls = "sync-indicator sync-" + status;
+  return html`<span className=${cls}>${labels[status] || ""}</span>`;
 }
 
 function App() {
   const [nodes, setNodes] = useState(null);
   const [preamble, setPreamble] = useState("");
+  const [version, setVersion] = useState(0);
   const [focusedId, setFocusedId] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [syncStatus, setSyncStatus] = useState(SYNC_SAVED);
   const pendingFocusRef = useRef(null);
   const inputRefs = useRef({});
-  const pendingTitle = useRef({});
-  const pendingBody = useRef({});
-  const pendingPreamble = useRef(null);
-  const saveTimers = useRef({});
-  const bodyTimers = useRef({});
-  const preambleTimer = useRef(null);
   const bodyTextareaRef = useRef(null);
+  const dirtyRef = useRef(false);
+  // Refs to always have latest state in the sync interval
+  const nodesRef = useRef(null);
+  const preambleRef = useRef("");
+  const versionRef = useRef(0);
+
+  // Keep refs in sync
+  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+  useEffect(() => { preambleRef.current = preamble; }, [preamble]);
+  useEffect(() => { versionRef.current = version; }, [version]);
+
+  const markDirty = useCallback(() => {
+    dirtyRef.current = true;
+    setSyncStatus(SYNC_DIRTY);
+  }, []);
 
   // Global Ctrl+H handler
   useEffect(() => {
@@ -308,7 +450,7 @@ function App() {
     return () => document.removeEventListener("keydown", handler);
   }, []);
 
-  // Focus the input whenever pendingFocusRef is set
+  // Focus effect
   useEffect(() => {
     const id = pendingFocusRef.current;
     if (id !== null) {
@@ -330,104 +472,64 @@ function App() {
     pendingFocusRef.current = id;
   }, []);
 
-  const applyResult = useCallback((data, focusId) => {
-    setNodes(data.nodes || []);
-    if (data.preamble !== undefined) setPreamble(data.preamble || "");
-    const target = data.focusId || focusId;
-    if (target) focusNode(target);
-  }, [focusNode]);
-
-  // Load on mount
+  // Load document on mount
   useEffect(() => {
-    api.get("/api/outline").then((data) => {
+    api.get("/api/doc").then((data) => {
       const n = data.nodes || [];
       setNodes(n);
       setPreamble(data.preamble || "");
+      setVersion(data.version || 0);
       const flat = flattenVisible(n);
       if (flat.length > 0) focusNode(flat[0].id);
     });
   }, [focusNode]);
 
-  // Debounced title save
-  const saveTitle = useCallback((nodeId, title) => {
-    if (saveTimers.current[nodeId]) clearTimeout(saveTimers.current[nodeId]);
-    saveTimers.current[nodeId] = setTimeout(async () => {
+  // Background sync: push to server every 3 seconds when dirty
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      if (!dirtyRef.current || !nodesRef.current) return;
+      dirtyRef.current = false;
+      setSyncStatus(SYNC_SAVING);
       try {
-        await api.put(`/api/nodes/${nodeId}`, { title });
-        delete pendingTitle.current[nodeId];
+        const result = await api.put("/api/doc", {
+          version: versionRef.current,
+          preamble: preambleRef.current,
+          nodes: nodesRef.current,
+        });
+        setVersion(result.version);
+        versionRef.current = result.version;
+        setSyncStatus(SYNC_SAVED);
       } catch (err) {
-        console.error("save failed:", err);
+        if (err.conflict) {
+          setSyncStatus(SYNC_CONFLICT);
+        } else {
+          dirtyRef.current = true; // retry next cycle
+          setSyncStatus(SYNC_ERROR);
+        }
       }
-    }, 400);
+    }, 3000);
+    return () => clearInterval(interval);
   }, []);
 
-  // Debounced body save
-  const saveBody = useCallback((nodeId, body) => {
-    if (bodyTimers.current[nodeId]) clearTimeout(bodyTimers.current[nodeId]);
-    bodyTimers.current[nodeId] = setTimeout(async () => {
-      try {
-        const data = await api.put(`/api/nodes/${nodeId}`, { body });
-        delete pendingBody.current[nodeId];
-        setNodes(data.nodes || []);
-      } catch (err) {
-        console.error("body save failed:", err);
-      }
-    }, 400);
+  // Also sync on page unload
+  useEffect(() => {
+    const handleUnload = () => {
+      if (!dirtyRef.current || !nodesRef.current) return;
+      const body = JSON.stringify({
+        version: versionRef.current,
+        preamble: preambleRef.current,
+        nodes: nodesRef.current,
+      });
+      navigator.sendBeacon("/api/doc", new Blob([body], { type: "application/json" }));
+    };
+    window.addEventListener("beforeunload", handleUnload);
+    return () => window.removeEventListener("beforeunload", handleUnload);
   }, []);
 
-  // Debounced preamble save
-  const savePreamble = useCallback((text) => {
-    if (preambleTimer.current) clearTimeout(preambleTimer.current);
-    preambleTimer.current = setTimeout(async () => {
-      try {
-        const data = await api.put("/api/preamble", { text });
-        pendingPreamble.current = null;
-        setNodes(data.nodes || []);
-      } catch (err) {
-        console.error("preamble save failed:", err);
-      }
-    }, 400);
-  }, []);
-
-  const flushSave = useCallback(async (nodeId) => {
-    if (saveTimers.current[nodeId]) {
-      clearTimeout(saveTimers.current[nodeId]);
-      delete saveTimers.current[nodeId];
-    }
-    const title = pendingTitle.current[nodeId];
-    if (title !== undefined) {
-      delete pendingTitle.current[nodeId];
-      await api.put(`/api/nodes/${nodeId}`, { title });
-    }
-  }, []);
-
-  const flushBody = useCallback(async () => {
-    for (const nodeId of Object.keys(bodyTimers.current)) {
-      clearTimeout(bodyTimers.current[nodeId]);
-      delete bodyTimers.current[nodeId];
-    }
-    for (const nodeId of Object.keys(pendingBody.current)) {
-      const body = pendingBody.current[nodeId];
-      delete pendingBody.current[nodeId];
-      await api.put(`/api/nodes/${nodeId}`, { body });
-    }
-  }, []);
-
-  const flushPreamble = useCallback(async () => {
-    if (preambleTimer.current) {
-      clearTimeout(preambleTimer.current);
-      preambleTimer.current = null;
-    }
-    if (pendingPreamble.current !== null) {
-      const text = pendingPreamble.current;
-      pendingPreamble.current = null;
-      await api.put("/api/preamble", { text });
-    }
-  }, []);
-
-  const dispatch = useCallback(async (nodeId, action, value) => {
-    // Build flat list with preamble as first entry for navigation
-    const flat = [{ id: "preamble" }, ...flattenVisible(nodes)];
+  // Dispatch: all operations are local state mutations
+  const dispatch = useCallback((nodeId, action, value) => {
+    // Build flat list with preamble for navigation
+    const flat = [{ id: "preamble" }, ...flattenVisible(nodesRef.current || [])];
     const idx = flat.findIndex((n) => n.id === nodeId);
 
     if (action === "focus") {
@@ -449,29 +551,8 @@ function App() {
       return;
     }
 
-    if (action === "change") {
-      pendingTitle.current[nodeId] = value;
-      setNodes((prev) => updateNodeField(prev, nodeId, "title", value));
-      saveTitle(nodeId, value);
-      return;
-    }
-
-    if (action === "change-body") {
-      pendingBody.current[nodeId] = value;
-      saveBody(nodeId, value);
-      return;
-    }
-
-    if (action === "change-preamble") {
-      pendingPreamble.current = value;
-      savePreamble(value);
-      return;
-    }
-
     if (action === "focus-body") {
-      if (bodyTextareaRef.current) {
-        bodyTextareaRef.current.focus();
-      }
+      if (bodyTextareaRef.current) bodyTextareaRef.current.focus();
       return;
     }
 
@@ -485,69 +566,111 @@ function App() {
       return;
     }
 
-    // Preamble doesn't support structural ops
-    if (nodeId === "preamble") return;
-
-    if (action === "toggle") {
-      await flushSave(nodeId);
-      const node = flat.find((n) => n.id === nodeId);
-      if (!node) return;
-      const data = await api.put(`/api/nodes/${nodeId}`, { collapsed: !node.collapsed });
-      applyResult(data, nodeId);
+    // Preamble only supports nav and focus-body
+    if (nodeId === "preamble") {
+      if (action === "change-preamble") {
+        setPreamble(value);
+        markDirty();
+      }
       return;
     }
 
-    // Structural ops — flush pending saves first
-    await flushSave(nodeId);
-    await flushBody();
-    await flushPreamble();
-
-    if (action === "new-sibling") {
-      const data = await api.post(`/api/nodes/${nodeId}/sibling`, { title: "" });
-      applyResult(data);
+    if (action === "change") {
+      setNodes((prev) => updateNodeField(prev, nodeId, "title", value));
+      markDirty();
       return;
     }
 
-    if (action === "delete") {
-      const prevId = idx > 0 ? flat[idx - 1].id : null;
-      const data = await api.del(`/api/nodes/${nodeId}`);
-      applyResult(data, prevId);
+    if (action === "change-body") {
+      setNodes((prev) => updateNodeField(prev, nodeId, "body", value));
+      markDirty();
       return;
     }
 
     if (action === "update-properties") {
-      const data = await api.put(`/api/nodes/${nodeId}`, { properties: value });
-      setNodes(data.nodes || []);
+      setNodes((prev) => updateNodeField(prev, nodeId, "properties", value));
+      markDirty();
       return;
     }
 
-    if (["indent", "outdent", "move-up", "move-down"].includes(action)) {
-      const data = await api.post(`/api/nodes/${nodeId}/move`, { action });
-      applyResult(data);
+    if (action === "toggle") {
+      setNodes((prev) => {
+        const node = findNode(prev, nodeId);
+        if (!node) return prev;
+        return updateNodeField(prev, nodeId, "collapsed", !node.collapsed);
+      });
+      markDirty();
+      return;
     }
-  }, [nodes, saveTitle, saveBody, savePreamble, flushSave, flushBody, flushPreamble, focusNode, applyResult]);
+
+    if (action === "new-sibling") {
+      setNodes((prev) => {
+        const { nodes: updated, newId } = insertSiblingAfter(prev, nodeId);
+        // Schedule focus after render
+        requestAnimationFrame(() => focusNode(newId));
+        return updated;
+      });
+      markDirty();
+      return;
+    }
+
+    if (action === "delete") {
+      const prevId = idx > 1 ? flat[idx - 1].id : (flat.length > 2 ? flat[2]?.id : null);
+      setNodes((prev) => removeNode(prev, nodeId));
+      if (prevId && prevId !== "preamble") focusNode(prevId);
+      markDirty();
+      return;
+    }
+
+    if (action === "indent") {
+      setNodes((prev) => indentNode(prev, nodeId));
+      focusNode(nodeId);
+      markDirty();
+      return;
+    }
+
+    if (action === "outdent") {
+      setNodes((prev) => outdentNode(prev, nodeId));
+      focusNode(nodeId);
+      markDirty();
+      return;
+    }
+
+    if (action === "move-up") {
+      setNodes((prev) => moveNodeUp(prev, nodeId));
+      focusNode(nodeId);
+      markDirty();
+      return;
+    }
+
+    if (action === "move-down") {
+      setNodes((prev) => moveNodeDown(prev, nodeId));
+      focusNode(nodeId);
+      markDirty();
+      return;
+    }
+  }, [focusNode, markDirty]);
 
   if (nodes === null) return html`<div className="empty">Loading...</div>`;
 
   const isPreambleFocused = focusedId === "preamble";
   const focusedNode = (!isPreambleFocused && focusedId) ? findNode(nodes, focusedId) : null;
-
-  // Build detail pane props
   const detailNode = isPreambleFocused ? { body: preamble } : focusedNode;
   const detailKey = isPreambleFocused ? "preamble" : focusedId;
 
   if (nodes.length === 0) {
     return html`
       <div>
-        <${Header} onHelp=${() => setShowHelp(true)} />
+        <${Header} onHelp=${() => setShowHelp(true)} syncStatus=${syncStatus} />
         <div className="app-layout">
           <div className="outline-pane">
             <${PreambleRow} focused=${isPreambleFocused} dispatch=${dispatch} inputRefs=${inputRefs} />
             <div className="empty"
-                 onClick=${async () => {
-                   const data = await api.post("/api/nodes/root/children", { title: "" });
-                   const flat = flattenVisible(data.nodes || []);
-                   applyResult(data, flat[0]?.id);
+                 onClick=${() => {
+                   const nn = newNode();
+                   setNodes([nn]);
+                   focusNode(nn.id);
+                   markDirty();
                  }}>
               Click or press any key to start
             </div>
@@ -568,7 +691,7 @@ function App() {
 
   return html`
     <div>
-      <${Header} onHelp=${() => setShowHelp(true)} />
+      <${Header} onHelp=${() => setShowHelp(true)} syncStatus=${syncStatus} />
       ${showHelp && html`<${HelpPanel} onClose=${() => setShowHelp(false)} />`}
       <div className="app-layout">
         <div className="outline-pane">
@@ -600,11 +723,14 @@ function App() {
   `;
 }
 
-function Header({ onHelp }) {
+function Header({ onHelp, syncStatus }) {
   return html`
     <header>
       <h1>torg</h1>
-      <button className="help-btn" onClick=${onHelp} title="Keyboard shortcuts (Ctrl+H)">?</button>
+      <div className="header-right">
+        <${SyncIndicator} status=${syncStatus} />
+        <button className="help-btn" onClick=${onHelp} title="Keyboard shortcuts (Ctrl+H)">?</button>
+      </div>
     </header>
   `;
 }

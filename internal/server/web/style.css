@@ -43,6 +43,43 @@ header h1 {
   text-transform: uppercase;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Sync indicator */
+.sync-indicator {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  user-select: none;
+}
+
+.sync-saved {
+  color: var(--text-dim);
+}
+
+.sync-unsaved {
+  color: #997a00;
+}
+
+.sync-saving {
+  color: #666;
+}
+
+.sync-error {
+  color: #c33;
+  background: #fee;
+}
+
+.sync-conflict {
+  color: #c33;
+  background: #fee;
+  font-weight: 600;
+}
+
 .help-btn {
   width: 24px;
   height: 24px;
@@ -176,6 +213,7 @@ header h1 {
 .outline-pane {
   flex: 1;
   min-width: 0;
+  padding-bottom: 48px;
 }
 
 /* Detail pane */

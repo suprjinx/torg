@@ -18,11 +18,9 @@ type Item struct {
 // Items is the flat ordered list — the source of truth.
 type Items []Item
 
-// Node is a tree node for the API response (derived from Items for display).
+// Node is a tree node exchanged with the frontend.
 type Node struct {
 	ID         string            `json:"id"`
-	Level      int               `json:"level"`
-	IsBody     bool              `json:"isBody,omitempty"`
 	Title      string            `json:"title"`
 	Body       string            `json:"body,omitempty"`
 	Status     string            `json:"status,omitempty"`
@@ -32,56 +30,67 @@ type Node struct {
 	Collapsed  bool              `json:"collapsed"`
 }
 
-// Outline is the API response.
-type Outline struct {
+// Document is the full document exchanged via GET/PUT /api/doc.
+type Document struct {
+	Version  int     `json:"version"`
+	Preamble string  `json:"preamble"`
 	Nodes    []*Node `json:"nodes"`
-	Preamble string  `json:"preamble,omitempty"`
-	FocusID  string  `json:"focusId,omitempty"`
 }
 
-// ToTree converts the flat list into a nested tree for display.
-// IDs are flat indices as strings. collapsed is keyed by flat index string.
-func (items Items) ToTree(collapsed map[string]bool) *Outline {
+// ToTree converts the flat item list into a nested tree for display.
+// IDs are assigned as flat indices. collapsed is keyed by flat index string.
+func (items Items) ToTree(collapsed map[string]bool) []*Node {
 	if len(items) == 0 {
-		return &Outline{Nodes: []*Node{}}
+		return []*Node{}
 	}
 
-	// Build nodes for each item
-	nodes := make([]*Node, len(items))
+	type indexedNode struct {
+		node  *Node
+		level int
+	}
+
+	nodes := make([]indexedNode, len(items))
 	for i, item := range items {
-		nodes[i] = &Node{
-			ID:         fmt.Sprintf("%d", i),
-			Level:      item.Level,
-			IsBody:     item.IsBody,
-			Title:      item.Title,
-			Status:     item.Status,
-			Tags:       item.Tags,
-			Properties: item.Properties,
-			Children:   []*Node{},
-			Collapsed:  collapsed[fmt.Sprintf("%d", i)],
+		nodes[i] = indexedNode{
+			node: &Node{
+				ID:         fmt.Sprintf("%d", i),
+				Title:      item.Title,
+				Status:     item.Status,
+				Tags:       item.Tags,
+				Properties: item.Properties,
+				Children:   []*Node{},
+				Collapsed:  collapsed[fmt.Sprintf("%d", i)],
+			},
+			level: item.Level,
+		}
+		if item.IsBody {
+			nodes[i].node.ID = fmt.Sprintf("body-%d", i)
 		}
 	}
 
 	// Build tree using a stack
 	var roots []*Node
-	var stack []*Node // stack of ancestor nodes
+	type stackEntry struct {
+		node  *Node
+		level int
+	}
+	var stack []stackEntry
 
 	for _, n := range nodes {
-		// Pop stack until we find a parent (lower level)
-		for len(stack) > 0 && stack[len(stack)-1].Level >= n.Level {
+		for len(stack) > 0 && stack[len(stack)-1].level >= n.level {
 			stack = stack[:len(stack)-1]
 		}
 		if len(stack) == 0 {
-			roots = append(roots, n)
+			roots = append(roots, n.node)
 		} else {
-			parent := stack[len(stack)-1]
-			parent.Children = append(parent.Children, n)
+			parent := stack[len(stack)-1].node
+			parent.Children = append(parent.Children, n.node)
 		}
-		stack = append(stack, n)
+		stack = append(stack, stackEntry{n.node, n.level})
 	}
 
 	mergeBodyChildren(roots)
-	return &Outline{Nodes: roots}
+	return roots
 }
 
 // mergeBodyChildren collects body child nodes into the parent's Body field
@@ -91,7 +100,7 @@ func mergeBodyChildren(nodes []*Node) {
 		var bodyLines []string
 		var headingChildren []*Node
 		for _, c := range n.Children {
-			if c.IsBody {
+			if strings.HasPrefix(c.ID, "body-") {
 				bodyLines = append(bodyLines, c.Title)
 			} else {
 				headingChildren = append(headingChildren, c)
@@ -100,57 +109,51 @@ func mergeBodyChildren(nodes []*Node) {
 		if len(bodyLines) > 0 {
 			n.Body = strings.Join(bodyLines, "\n")
 		}
+		if headingChildren == nil {
+			headingChildren = []*Node{}
+		}
 		n.Children = headingChildren
 		mergeBodyChildren(n.Children)
 	}
 }
 
-// SubtreeEnd returns the exclusive end index of the subtree rooted at idx.
-// The subtree includes idx and all following items with level > items[idx].Level.
-func (items Items) SubtreeEnd(idx int) int {
-	level := items[idx].Level
-	j := idx + 1
-	for j < len(items) && items[j].Level > level {
-		j++
+// ItemsFromTree converts a tree of Nodes back into a flat Items list
+// for serialization to org format.
+func ItemsFromTree(nodes []*Node, level int) Items {
+	var items Items
+	for _, n := range nodes {
+		items = append(items, Item{
+			Level:      level,
+			Title:      n.Title,
+			Status:     n.Status,
+			Tags:       n.Tags,
+			Properties: n.Properties,
+		})
+		if n.Body != "" {
+			items = append(items, Item{
+				Level:  level + 1,
+				IsBody: true,
+				Title:  n.Body,
+			})
+		}
+		items = append(items, ItemsFromTree(n.Children, level+1)...)
 	}
-	return j
+	return items
 }
 
-// PrevSibling returns the index of the previous sibling of items[idx]
-// (same level, same parent), or -1 if at the first position.
-func (items Items) PrevSibling(idx int) int {
-	level := items[idx].Level
-	for i := idx - 1; i >= 0; i-- {
-		if items[i].Level == level {
-			return i
-		}
-		if items[i].Level < level {
-			return -1 // hit parent, no previous sibling
-		}
-	}
-	return -1
-}
-
-// NextSibling returns the index of the next sibling of items[idx]
-// (same level, same parent), or -1 if at the last position.
-func (items Items) NextSibling(idx int) int {
-	end := items.SubtreeEnd(idx)
-	if end >= len(items) {
-		return -1
-	}
-	if items[end].Level == items[idx].Level {
-		return end
-	}
-	return -1 // hit lower level = parent boundary
-}
-
-// ParentIdx returns the index of the parent of items[idx], or -1 for root items.
-func (items Items) ParentIdx(idx int) int {
-	level := items[idx].Level
-	for i := idx - 1; i >= 0; i-- {
-		if items[i].Level < level {
-			return i
+// CollapsedFromTree extracts collapsed state from a node tree.
+// Returns a map keyed by node ID.
+func CollapsedFromTree(nodes []*Node) map[string]bool {
+	m := make(map[string]bool)
+	var walk func([]*Node)
+	walk = func(nodes []*Node) {
+		for _, n := range nodes {
+			if n.Collapsed {
+				m[n.ID] = true
+			}
+			walk(n.Children)
 		}
 	}
-	return -1
+	walk(nodes)
+	return m
 }

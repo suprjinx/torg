@@ -57,18 +57,3 @@ func (items Items) ToOrg() string {
 	return b.String()
 }
 
-// CollapsedMap extracts collapsed state from a tree (for saving to sidecar).
-func CollapsedFromTree(outline *Outline) map[string]bool {
-	m := make(map[string]bool)
-	var walk func([]*Node)
-	walk = func(nodes []*Node) {
-		for _, n := range nodes {
-			if n.Collapsed {
-				m[n.ID] = true
-			}
-			walk(n.Children)
-		}
-	}
-	walk(outline.Nodes)
-	return m
-}

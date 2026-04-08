@@ -3,6 +3,8 @@ package orgfile
 import (
 	"encoding/json"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -10,14 +12,15 @@ import (
 )
 
 // Store manages reading and writing an org file with concurrency safety.
-// UI metadata (collapsed state) is stored in a .torg.json sidecar file.
+// UI metadata (collapsed state) is stored in a .meta.json sidecar file.
 type Store struct {
 	path     string
 	metaPath string
 	mu       sync.RWMutex
 	doc      *org.Document
 	meta     Meta
-	preamble string // text before the first heading, preserved on save
+	preamble string // user-visible preamble (without version line)
+	version  int    // document version for conflict detection
 }
 
 // Meta holds UI state that doesn't belong in the org file.
@@ -55,11 +58,12 @@ func (s *Store) loadLocked() error {
 		return err
 	}
 
-	// Extract preamble (everything before the first heading line)
-	s.preamble = extractPreamble(string(data))
+	raw := string(data)
+	rawPreamble := extractPreamble(raw)
+	s.version, s.preamble = parseVersionFromPreamble(rawPreamble)
 
 	conf := org.New()
-	s.doc = conf.Parse(strings.NewReader(string(data)), s.path)
+	s.doc = conf.Parse(strings.NewReader(raw), s.path)
 
 	// Load sidecar metadata
 	s.meta = Meta{Collapsed: make(map[string]bool)}
@@ -101,10 +105,26 @@ func (s *Store) RLock()   { s.mu.RLock() }
 func (s *Store) RUnlock() { s.mu.RUnlock() }
 func (s *Store) Lock()    { s.mu.Lock() }
 func (s *Store) Unlock()  { s.mu.Unlock() }
-func (s *Store) Path() string     { return s.path }
-func (s *Store) Preamble() string { return s.preamble }
-func (s *Store) SetPreamble(p string) {
-	s.preamble = p
+
+func (s *Store) Path() string        { return s.path }
+func (s *Store) Version() int        { return s.version }
+func (s *Store) Preamble() string    { return s.preamble }
+
+// BuildPreamble constructs the full preamble string for writing to disk,
+// including the version line and user preamble.
+func BuildPreamble(version int, userPreamble string) string {
+	var b strings.Builder
+	b.WriteString("#+TORG_VERSION: ")
+	b.WriteString(strconv.Itoa(version))
+	b.WriteString("\n")
+	if userPreamble != "" {
+		p := userPreamble
+		if !strings.HasSuffix(p, "\n") {
+			p += "\n"
+		}
+		b.WriteString(p)
+	}
+	return b.String()
 }
 
 // extractPreamble returns all text before the first org heading line,
@@ -120,4 +140,20 @@ func extractPreamble(content string) string {
 		}
 	}
 	return content // no headings at all
+}
+
+var versionRe = regexp.MustCompile(`(?m)^#\+TORG_VERSION:\s*(\d+)\s*$`)
+
+// parseVersionFromPreamble extracts the version number and returns the
+// preamble with the version line removed. If no version line, returns 0.
+func parseVersionFromPreamble(preamble string) (int, string) {
+	m := versionRe.FindStringSubmatch(preamble)
+	version := 0
+	if len(m) >= 2 {
+		version, _ = strconv.Atoi(m[1])
+	}
+	cleaned := versionRe.ReplaceAllString(preamble, "")
+	// Remove leading/trailing blank lines left over
+	cleaned = strings.TrimRight(cleaned, "\n")
+	return version, cleaned
 }
