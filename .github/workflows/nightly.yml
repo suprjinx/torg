@@ -1,0 +1,82 @@
+name: Nightly Build
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # 6 AM UTC daily
+  workflow_dispatch: # allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            name: torg-linux-amd64
+          - goos: linux
+            goarch: arm64
+            name: torg-linux-arm64
+          - goos: darwin
+            goarch: amd64
+            name: torg-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            name: torg-darwin-arm64
+          - goos: windows
+            goarch: amd64
+            name: torg-windows-amd64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: go build -ldflags="-s -w" -o ${{ matrix.name }} .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Delete existing nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete nightly -y --repo ${{ github.repository }} 2>/dev/null || true
+
+      - name: Delete nightly tag
+        run: |
+          git clone --bare https://x-access-token:${{ github.token }}@github.com/${{ github.repository }} repo
+          cd repo
+          git tag -d nightly 2>/dev/null || true
+          git push origin :refs/tags/nightly 2>/dev/null || true
+
+      - name: Create nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create nightly \
+            --repo ${{ github.repository }} \
+            --title "Nightly Build" \
+            --notes "Automated nightly build from main. Updated daily at 6 AM UTC." \
+            --prerelease \
+            artifacts/*
