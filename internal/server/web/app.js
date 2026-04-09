@@ -27,6 +27,25 @@ const api = {
   },
 };
 
+// --- Org date helpers ---
+// Org timestamps: <2026-04-15 Wed>
+// HTML date inputs: 2026-04-15
+
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function formatOrgDate(isoDate) {
+  if (!isoDate) return "";
+  const d = new Date(isoDate + "T00:00:00");
+  return `<${isoDate} ${DAYS[d.getDay()]}>`;
+}
+
+function parseOrgDate(orgDate) {
+  if (!orgDate) return "";
+  // Handle both "<2026-04-15 Wed>" and bare "2026-04-15"
+  const m = orgDate.match(/(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : "";
+}
+
 // --- Local ID generator ---
 
 let _nextId = 1;
@@ -70,6 +89,15 @@ function newNode(title = "") {
     children: [],
     collapsed: false,
   };
+}
+
+// Fold tree to a given depth: nodes at depth >= level get collapsed
+function foldToLevel(nodes, level, depth = 1) {
+  return nodes.map((n) => ({
+    ...n,
+    collapsed: n.children?.length > 0 && depth >= level,
+    children: n.children?.length > 0 ? foldToLevel(n.children, level, depth + 1) : n.children,
+  }));
 }
 
 // Deep-clone a tree, updating a single node field
@@ -192,6 +220,13 @@ function mapNode(nodes, id, fn) {
   });
 }
 
+const STATUS_CYCLE = ["", "TODO", "DONE"];
+
+function nextStatus(current) {
+  const idx = STATUS_CYCLE.indexOf(current || "");
+  return STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length];
+}
+
 // --- Components ---
 
 function PreambleRow({ focused, dispatch, inputRefs }) {
@@ -226,9 +261,18 @@ function OutlineNode({ node, focusedId, dispatch, inputRefs, depth }) {
               }}>
           ${hasChildren ? (node.collapsed ? "\u25B6" : "\u25BC") : "\u2022"}
         </span>
+        ${node.status ? html`
+          <span className=${"status-badge status-" + node.status.toLowerCase()}
+                onClick=${(e) => { e.stopPropagation(); dispatch(node.id, "cycle-status"); }}
+                title="Click to change status">${node.status}</span>
+        ` : html`
+          <span className="status-badge status-none"
+                onClick=${(e) => { e.stopPropagation(); dispatch(node.id, "cycle-status"); }}
+                title="Click to set status"></span>
+        `}
         <input
           ref=${(el) => { if (el) inputRefs.current[node.id] = el; }}
-          className="node-title"
+          className=${"node-title" + (node.status === "DONE" ? " done" : "")}
           value=${node.title}
           placeholder=""
           onFocus=${() => dispatch(node.id, "focus")}
@@ -359,6 +403,23 @@ function DetailPane({ node, isPreamble, dispatch, inputRefs, bodyTextareaRef }) 
       </div>
       ${!isPreamble && html`
         <div className="detail-section">
+          <label className="detail-label">Due date</label>
+          <input
+            type="date"
+            className="detail-date"
+            value=${parseOrgDate(node.properties?.DEADLINE)}
+            onChange=${(e) => {
+              const updated = { ...(node.properties || {}) };
+              if (e.target.value) {
+                updated.DEADLINE = formatOrgDate(e.target.value);
+              } else {
+                delete updated.DEADLINE;
+              }
+              dispatch(node.id, "update-properties", updated);
+            }}
+          />
+        </div>
+        <div className="detail-section">
           <label className="detail-label">Properties</label>
           <${PropertiesEditor}
             nodeId=${node.id}
@@ -367,6 +428,110 @@ function DetailPane({ node, isPreamble, dispatch, inputRefs, bodyTextareaRef }) 
           />
         </div>
       `}
+    </div>
+  `;
+}
+
+// Uncollapse all ancestors of a node so it becomes visible
+function uncollapseToNode(nodes, targetId) {
+  // Returns [updatedNodes, found]
+  function walk(list) {
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].id === targetId) return [list, true];
+      if (list[i].children?.length > 0) {
+        const [updated, found] = walk(list[i].children);
+        if (found) {
+          const newList = [...list];
+          newList[i] = { ...list[i], collapsed: false, children: updated };
+          return [newList, true];
+        }
+      }
+    }
+    return [list, false];
+  }
+  const [result] = walk(nodes);
+  return result;
+}
+
+// --- Agenda helpers ---
+
+function collectDatedItems(nodes, ancestors = []) {
+  const items = [];
+  for (const n of nodes) {
+    const raw = n.properties?.DEADLINE;
+    const date = parseOrgDate(raw);
+    if (date) {
+      items.push({ id: n.id, title: n.title, date, status: n.status, ancestors });
+    }
+    if (n.children?.length > 0) {
+      items.push(...collectDatedItems(n.children, [...ancestors, n.title]));
+    }
+  }
+  return items;
+}
+
+function formatDate(dateStr) {
+  try {
+    const d = new Date(dateStr + "T00:00:00");
+    return d.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+  } catch {
+    return dateStr;
+  }
+}
+
+function isOverdue(dateStr) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const d = new Date(dateStr + "T00:00:00");
+  return d < today;
+}
+
+function isToday(dateStr) {
+  const today = new Date().toISOString().slice(0, 10);
+  return dateStr === today;
+}
+
+function AgendaView({ nodes, onSelect }) {
+  const items = collectDatedItems(nodes);
+  items.sort((a, b) => a.date.localeCompare(b.date));
+
+  if (items.length === 0) {
+    return html`<div className="agenda-empty">No items with due dates</div>`;
+  }
+
+  // Group by date
+  const groups = [];
+  let currentDate = null;
+  let currentGroup = null;
+  for (const item of items) {
+    if (item.date !== currentDate) {
+      currentDate = item.date;
+      currentGroup = { date: item.date, items: [] };
+      groups.push(currentGroup);
+    }
+    currentGroup.items.push(item);
+  }
+
+  return html`
+    <div className="agenda-view">
+      ${groups.map((g) => html`
+        <div className="agenda-group" key=${g.date}>
+          <div className=${"agenda-date" + (isOverdue(g.date) ? " overdue" : "") + (isToday(g.date) ? " today" : "")}>
+            ${formatDate(g.date)}
+            ${isToday(g.date) && html`<span className="agenda-badge">today</span>`}
+            ${isOverdue(g.date) && html`<span className="agenda-badge overdue">overdue</span>`}
+          </div>
+          ${g.items.map((item) => html`
+            <div className="agenda-item" key=${item.id}
+                 onClick=${() => onSelect(item.id)}>
+              <span className="agenda-item-title">${item.title || "Untitled"}</span>
+              ${item.ancestors.length > 0 && html`
+                <span className="agenda-item-path">${item.ancestors.join(" \u203A ")}</span>
+              `}
+            </div>
+          `)}
+        </div>
+      `)}
     </div>
   `;
 }
@@ -419,6 +584,7 @@ function App() {
   const [focusedId, setFocusedId] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
   const [syncStatus, setSyncStatus] = useState(SYNC_SAVED);
+  const [view, setView] = useState("outline"); // "outline" | "agenda"
   const pendingFocusRef = useRef(null);
   const inputRefs = useRef({});
   const bodyTextareaRef = useRef(null);
@@ -438,17 +604,25 @@ function App() {
     setSyncStatus(SYNC_DIRTY);
   }, []);
 
-  // Global Ctrl+H handler
+  // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "h") {
         e.preventDefault();
         setShowHelp((v) => !v);
+        return;
+      }
+      // Alt+1-9: fold to level
+      if (e.altKey && e.key >= "1" && e.key <= "9") {
+        e.preventDefault();
+        const level = parseInt(e.key);
+        setNodes((prev) => prev ? foldToLevel(prev, level) : prev);
+        markDirty();
       }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, []);
+  }, [markDirty]);
 
   // Focus effect
   useEffect(() => {
@@ -581,6 +755,16 @@ function App() {
       return;
     }
 
+    if (action === "cycle-status") {
+      setNodes((prev) => {
+        const node = findNode(prev, nodeId);
+        if (!node) return prev;
+        return updateNodeField(prev, nodeId, "status", nextStatus(node.status));
+      });
+      markDirty();
+      return;
+    }
+
     if (action === "change-body") {
       setNodes((prev) => updateNodeField(prev, nodeId, "body", value));
       markDirty();
@@ -651,6 +835,12 @@ function App() {
     }
   }, [focusNode, markDirty]);
 
+  const handleAgendaSelect = useCallback((itemId) => {
+    setView("outline");
+    setNodes((prev) => uncollapseToNode(prev, itemId));
+    requestAnimationFrame(() => focusNode(itemId));
+  }, [focusNode]);
+
   if (nodes === null) return html`<div className="empty">Loading...</div>`;
 
   const isPreambleFocused = focusedId === "preamble";
@@ -661,7 +851,7 @@ function App() {
   if (nodes.length === 0) {
     return html`
       <div>
-        <${Header} onHelp=${() => setShowHelp(true)} syncStatus=${syncStatus} />
+        <${Header} onHelp=${() => setShowHelp(true)} syncStatus=${syncStatus} view=${view} setView=${setView} />
         <div className="app-layout">
           <div className="outline-pane">
             <${PreambleRow} focused=${isPreambleFocused} dispatch=${dispatch} inputRefs=${inputRefs} />
@@ -691,24 +881,31 @@ function App() {
 
   return html`
     <div>
-      <${Header} onHelp=${() => setShowHelp(true)} syncStatus=${syncStatus} />
+      <${Header} onHelp=${() => setShowHelp(true)} syncStatus=${syncStatus} view=${view} setView=${setView} />
       ${showHelp && html`<${HelpPanel} onClose=${() => setShowHelp(false)} />`}
       <div className="app-layout">
-        <div className="outline-pane">
-          <${PreambleRow} focused=${isPreambleFocused} dispatch=${dispatch} inputRefs=${inputRefs} />
-          ${nodes.map(
-            (node) => html`
-              <${OutlineNode}
-                key=${node.id}
-                node=${node}
-                focusedId=${focusedId}
-                dispatch=${dispatch}
-                inputRefs=${inputRefs}
-                depth=${0}
-              />
-            `
-          )}
-        </div>
+        ${view === "outline" && html`
+          <div className="outline-pane">
+            <${PreambleRow} focused=${isPreambleFocused} dispatch=${dispatch} inputRefs=${inputRefs} />
+            ${nodes.map(
+              (node) => html`
+                <${OutlineNode}
+                  key=${node.id}
+                  node=${node}
+                  focusedId=${focusedId}
+                  dispatch=${dispatch}
+                  inputRefs=${inputRefs}
+                  depth=${0}
+                />
+              `
+            )}
+          </div>
+        `}
+        ${view === "agenda" && html`
+          <div className="outline-pane">
+            <${AgendaView} nodes=${nodes} onSelect=${handleAgendaSelect} />
+          </div>
+        `}
         <${DetailPane}
           key=${detailKey}
           node=${detailNode}
@@ -723,10 +920,16 @@ function App() {
   `;
 }
 
-function Header({ onHelp, syncStatus }) {
+function Header({ onHelp, syncStatus, view, setView }) {
   return html`
     <header>
       <h1>torg</h1>
+      <div className="view-toggle">
+        <button className=${"view-tab" + (view === "outline" ? " active" : "")}
+                onClick=${() => setView("outline")}>Outline</button>
+        <button className=${"view-tab" + (view === "agenda" ? " active" : "")}
+                onClick=${() => setView("agenda")}>Agenda</button>
+      </div>
       <div className="header-right">
         <${SyncIndicator} status=${syncStatus} />
         <button className="help-btn" onClick=${onHelp} title="Keyboard shortcuts (Ctrl+H)">?</button>
@@ -768,6 +971,7 @@ function HelpPanel({ onClose }) {
           <${HelpSection} title="Folding">
             <${HelpRow} keys="Tab" desc="Fold / unfold children" />
             <${HelpRow} keys="Click bullet" desc="Fold / unfold children" />
+            <${HelpRow} keys="Alt + 1\u20139" desc="Fold to level N" />
           <//>
           <${HelpSection} title="Other">
             <${HelpRow} keys="Ctrl + H" desc="Toggle this help" />
