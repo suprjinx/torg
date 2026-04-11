@@ -3,69 +3,122 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/suprjinx/torg/internal/model"
 	"github.com/suprjinx/torg/internal/orgfile"
 )
 
 type handlers struct {
-	store *orgfile.Store
+	store  *orgfile.Store
+	onSave func() // called after successful save (resets idle timer)
+}
+
+func (h *handlers) listFiles(w http.ResponseWriter, r *http.Request) {
+	files, err := h.store.ListFiles()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string][]string{"files": files})
+}
+
+func (h *handlers) createFile(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Filename string `json:"filename"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	name := req.Filename
+	if !strings.HasSuffix(name, ".org") {
+		name += ".org"
+	}
+	if err := h.store.CreateFile(name); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	writeJSON(w, map[string]string{"filename": name})
 }
 
 func (h *handlers) getDoc(w http.ResponseWriter, r *http.Request) {
-	h.store.RLock()
-	defer h.store.RUnlock()
+	name := extractFilename(r.URL.Path)
+	if name == "" {
+		http.Error(w, "missing filename", http.StatusBadRequest)
+		return
+	}
 
-	items := model.FromDocument(h.store.Doc())
-	nodes := items.ToTree(h.store.Collapsed())
+	fs, err := h.store.LoadFile(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	items := model.FromDocument(fs.Doc)
+	nodes := items.ToTree(fs.Meta.Collapsed)
 
 	writeJSON(w, model.Document{
-		Version:  h.store.Version(),
-		Preamble: h.store.Preamble(),
+		Filename: name,
+		Preamble: fs.Preamble,
+		Hash:     fs.BaseHash,
 		Nodes:    nodes,
 	})
 }
 
 func (h *handlers) putDoc(w http.ResponseWriter, r *http.Request) {
+	name := extractFilename(r.URL.Path)
+	if name == "" {
+		http.Error(w, "missing filename", http.StatusBadRequest)
+		return
+	}
+
 	var doc model.Document
 	if err := json.NewDecoder(r.Body).Decode(&doc); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	h.store.Lock()
-	defer h.store.Unlock()
-
-	// Version conflict check
-	if doc.Version != h.store.Version() {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":   "conflict",
-			"version": h.store.Version(),
-		})
-		return
-	}
-
-	// Convert tree back to flat items, then to org text
+	// Convert tree to org content
 	items := model.ItemsFromTree(doc.Nodes, 1)
-	newVersion := doc.Version + 1
-	preamble := orgfile.BuildPreamble(newVersion, doc.Preamble)
+	preamble := doc.Preamble
+	if preamble != "" && !strings.HasSuffix(preamble, "\n") {
+		preamble += "\n"
+	}
 	content := preamble + items.ToOrg()
 
-	if err := h.store.Save(content); err != nil {
+	// Save collapsed state to sidecar
+	collapsed := model.CollapsedFromTree(doc.Nodes)
+	h.store.SaveMeta(name, collapsed)
+
+	// Write to disk with merge-on-conflict
+	newHash, conflict, err := h.store.SaveFile(name, content)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Save collapsed state from the tree to sidecar
-	collapsed := model.CollapsedFromTree(doc.Nodes)
-	h.store.SaveMeta(collapsed)
+	if h.onSave != nil {
+		h.onSave()
+	}
 
-	writeJSON(w, map[string]int{"version": newVersion})
+	resp := map[string]interface{}{"hash": newHash}
+	if conflict {
+		resp["conflict"] = true
+	}
+	writeJSON(w, resp)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+func extractFilename(path string) string {
+	// /api/doc/notes.org -> notes.org
+	const prefix = "/api/doc/"
+	if !strings.HasPrefix(path, prefix) {
+		return ""
+	}
+	return strings.TrimPrefix(path, prefix)
 }

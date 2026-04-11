@@ -1,4 +1,4 @@
-#+TORG_VERSION: 28
+#+TORG_VERSION: 30
 
 Here's some header material!
 Ignore 
@@ -6,6 +6,9 @@ at your peril
 * Inbox
 here's something else
 ** some more items
+:PROPERTIES:
+:DEADLINE: <2026-04-09 Thu>
+:END:
 ** another
 here's a note for me
 ** back in the outline

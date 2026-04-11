@@ -30,15 +30,16 @@ type Node struct {
 	Collapsed  bool              `json:"collapsed"`
 }
 
-// Document is the full document exchanged via GET/PUT /api/doc.
+// Document is the full document exchanged via GET/PUT /api/doc/:filename.
 type Document struct {
-	Version  int     `json:"version"`
+	Filename string  `json:"filename"`
 	Preamble string  `json:"preamble"`
+	Hash     string  `json:"hash"`
 	Nodes    []*Node `json:"nodes"`
 }
 
 // ToTree converts the flat item list into a nested tree for display.
-// IDs are assigned as flat indices. collapsed is keyed by flat index string.
+// collapsed is keyed by heading index (as string).
 func (items Items) ToTree(collapsed map[string]bool) []*Node {
 	if len(items) == 0 {
 		return []*Node{}
@@ -50,25 +51,26 @@ func (items Items) ToTree(collapsed map[string]bool) []*Node {
 	}
 
 	nodes := make([]indexedNode, len(items))
+	headingIdx := 0
 	for i, item := range items {
-		nodes[i] = indexedNode{
-			node: &Node{
-				ID:         fmt.Sprintf("%d", i),
-				Title:      item.Title,
-				Status:     item.Status,
-				Tags:       item.Tags,
-				Properties: item.Properties,
-				Children:   []*Node{},
-				Collapsed:  collapsed[fmt.Sprintf("%d", i)],
-			},
-			level: item.Level,
+		n := &Node{
+			Title:      item.Title,
+			Status:     item.Status,
+			Tags:       item.Tags,
+			Properties: item.Properties,
+			Children:   []*Node{},
 		}
 		if item.IsBody {
-			nodes[i].node.ID = fmt.Sprintf("body-%d", i)
+			n.ID = "body"
+		} else {
+			id := fmt.Sprintf("%d", headingIdx)
+			n.ID = id
+			n.Collapsed = collapsed[id]
+			headingIdx++
 		}
+		nodes[i] = indexedNode{node: n, level: item.Level}
 	}
 
-	// Build tree using a stack
 	var roots []*Node
 	type stackEntry struct {
 		node  *Node
@@ -100,7 +102,7 @@ func mergeBodyChildren(nodes []*Node) {
 		var bodyLines []string
 		var headingChildren []*Node
 		for _, c := range n.Children {
-			if strings.HasPrefix(c.ID, "body-") {
+			if c.ID == "body" {
 				bodyLines = append(bodyLines, c.Title)
 			} else {
 				headingChildren = append(headingChildren, c)
@@ -142,7 +144,6 @@ func ItemsFromTree(nodes []*Node, level int) Items {
 }
 
 // CollapsedFromTree extracts collapsed state from a node tree.
-// Returns a map keyed by node ID.
 func CollapsedFromTree(nodes []*Node) map[string]bool {
 	m := make(map[string]bool)
 	var walk func([]*Node)

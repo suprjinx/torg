@@ -18,18 +18,21 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (r.status === 409) {
-      const data = await r.json();
-      throw Object.assign(new Error("conflict"), { conflict: true, serverVersion: data.version });
-    }
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  },
+  async post(path, body) {
+    const r = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
     if (!r.ok) throw new Error(`${r.status}`);
     return r.json();
   },
 };
 
 // --- Org date helpers ---
-// Org timestamps: <2026-04-15 Wed>
-// HTML date inputs: 2026-04-15
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -41,7 +44,6 @@ function formatOrgDate(isoDate) {
 
 function parseOrgDate(orgDate) {
   if (!orgDate) return "";
-  // Handle both "<2026-04-15 Wed>" and bare "2026-04-15"
   const m = orgDate.match(/(\d{4}-\d{2}-\d{2})/);
   return m ? m[1] : "";
 }
@@ -91,7 +93,7 @@ function newNode(title = "") {
   };
 }
 
-// Fold tree to a given depth: nodes at depth >= level get collapsed
+// Fold tree to a given depth
 function foldToLevel(nodes, level, depth = 1) {
   return nodes.map((n) => ({
     ...n,
@@ -100,7 +102,6 @@ function foldToLevel(nodes, level, depth = 1) {
   }));
 }
 
-// Deep-clone a tree, updating a single node field
 function updateNodeField(nodes, nodeId, field, value) {
   return nodes.map((n) => {
     if (n.id === nodeId) return { ...n, [field]: value };
@@ -109,106 +110,85 @@ function updateNodeField(nodes, nodeId, field, value) {
   });
 }
 
-// Find parent + index of a node within the tree
-function findParentInfo(nodes, id, parent = null, parentList = null) {
+function findParentInfo(nodes, id, parent = null) {
   for (let i = 0; i < nodes.length; i++) {
     if (nodes[i].id === id) return { parent, parentList: nodes, index: i };
     if (nodes[i].children?.length > 0) {
-      const found = findParentInfo(nodes[i].children, id, nodes[i], nodes[i].children);
+      const found = findParentInfo(nodes[i].children, id, nodes[i]);
       if (found) return found;
     }
   }
   return null;
 }
 
-// Insert a new sibling after a node (after its subtree position)
 function insertSiblingAfter(nodes, afterId) {
   const nn = newNode();
   return { nodes: insertAfter(nodes, afterId, nn), newId: nn.id };
 }
 
-function insertAfter(nodes, afterId, newNode) {
+function insertAfter(nodes, afterId, nn) {
   const result = [];
   for (const n of nodes) {
     if (n.id === afterId) {
       result.push({ ...n, children: n.children ? [...n.children] : [] });
-      result.push(newNode);
+      result.push(nn);
     } else {
-      const updatedChildren = n.children?.length > 0 ? insertAfter(n.children, afterId, newNode) : n.children;
-      result.push(updatedChildren !== n.children ? { ...n, children: updatedChildren } : n);
+      const updated = n.children?.length > 0 ? insertAfter(n.children, afterId, nn) : n.children;
+      result.push(updated !== n.children ? { ...n, children: updated } : n);
     }
   }
   return result;
 }
 
-// Remove a node from the tree
 function removeNode(nodes, id) {
   const result = [];
   for (const n of nodes) {
     if (n.id === id) continue;
-    const updatedChildren = n.children?.length > 0 ? removeNode(n.children, id) : n.children;
-    result.push(updatedChildren !== n.children ? { ...n, children: updatedChildren } : n);
+    const updated = n.children?.length > 0 ? removeNode(n.children, id) : n.children;
+    result.push(updated !== n.children ? { ...n, children: updated } : n);
   }
   return result;
 }
 
-// Indent: make node a child of its previous sibling
 function indentNode(nodes, id) {
   const info = findParentInfo(nodes, id);
-  if (!info || info.index === 0) return nodes; // can't indent first child
-
+  if (!info || info.index === 0) return nodes;
   const prevSibling = info.parentList[info.index - 1];
   const node = info.parentList[info.index];
-
-  // Remove node from current position
   let result = removeNode(nodes, id);
-  // Append to previous sibling's children and uncollapse it
   result = mapNode(result, prevSibling.id, (n) => ({
-    ...n,
-    collapsed: false,
-    children: [...(n.children || []), { ...node }],
+    ...n, collapsed: false, children: [...(n.children || []), { ...node }],
   }));
   return result;
 }
 
-// Outdent: move node to be a sibling of its parent (after parent)
 function outdentNode(nodes, id) {
   const info = findParentInfo(nodes, id);
-  if (!info || !info.parent) return nodes; // already at root
-
+  if (!info || !info.parent) return nodes;
   const node = info.parentList[info.index];
-  // Remove from current parent
   let result = removeNode(nodes, id);
-  // Insert after the parent
   result = insertAfter(result, info.parent.id, { ...node });
   return result;
 }
 
-// Move node up within its siblings
 function moveNodeUp(nodes, id) {
   const info = findParentInfo(nodes, id);
   if (!info || info.index === 0) return nodes;
-
   const list = [...info.parentList];
   [list[info.index - 1], list[info.index]] = [list[info.index], list[info.index - 1]];
-
   if (!info.parent) return list;
   return mapNode(nodes, info.parent.id, (n) => ({ ...n, children: list }));
 }
 
-// Move node down within its siblings
 function moveNodeDown(nodes, id) {
   const info = findParentInfo(nodes, id);
   if (!info || info.index >= info.parentList.length - 1) return nodes;
-
   const list = [...info.parentList];
   [list[info.index], list[info.index + 1]] = [list[info.index + 1], list[info.index]];
-
   if (!info.parent) return list;
   return mapNode(nodes, info.parent.id, (n) => ({ ...n, children: list }));
 }
 
-// Apply a transform to a specific node by ID
 function mapNode(nodes, id, fn) {
   return nodes.map((n) => {
     if (n.id === id) return fn(n);
@@ -220,11 +200,62 @@ function mapNode(nodes, id, fn) {
   });
 }
 
-const STATUS_CYCLE = ["", "TODO", "DONE"];
+function uncollapseToNode(nodes, targetId) {
+  function walk(list) {
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].id === targetId) return [list, true];
+      if (list[i].children?.length > 0) {
+        const [updated, found] = walk(list[i].children);
+        if (found) {
+          const newList = [...list];
+          newList[i] = { ...list[i], collapsed: false, children: updated };
+          return [newList, true];
+        }
+      }
+    }
+    return [list, false];
+  }
+  const [result] = walk(nodes);
+  return result;
+}
 
+const STATUS_CYCLE = ["", "TODO", "DONE"];
 function nextStatus(current) {
   const idx = STATUS_CYCLE.indexOf(current || "");
   return STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length];
+}
+
+// --- Agenda helpers ---
+
+function collectDatedItems(nodes, ancestors = []) {
+  const items = [];
+  for (const n of nodes) {
+    const raw = n.properties?.DEADLINE;
+    const date = parseOrgDate(raw);
+    if (date) {
+      items.push({ id: n.id, title: n.title, date, status: n.status, ancestors });
+    }
+    if (n.children?.length > 0) {
+      items.push(...collectDatedItems(n.children, [...ancestors, n.title]));
+    }
+  }
+  return items;
+}
+
+function formatDateDisplay(dateStr) {
+  try {
+    const d = new Date(dateStr + "T00:00:00");
+    return d.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+  } catch { return dateStr; }
+}
+
+function isOverdue(dateStr) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return new Date(dateStr + "T00:00:00") < today;
+}
+
+function isToday(dateStr) {
+  return dateStr === new Date().toISOString().slice(0, 10);
 }
 
 // --- Components ---
@@ -306,21 +337,16 @@ function PropertiesEditor({ nodeId, properties, dispatch }) {
       ${entries.map(([k, v]) => html`
         <div className="prop-row" key=${k}>
           <span className="prop-key">${k}</span>
-          <input
-            className="prop-value"
-            value=${v}
+          <input className="prop-value" value=${v}
             onChange=${(e) => {
-              const updated = { ...properties, [k]: e.target.value };
-              dispatch(nodeId, "update-properties", updated);
-            }}
-          />
+              dispatch(nodeId, "update-properties", { ...properties, [k]: e.target.value });
+            }} />
           <button className="prop-delete"
                   onClick=${() => {
                     const updated = { ...properties };
                     delete updated[k];
                     dispatch(nodeId, "update-properties", updated);
-                  }}
-                  title="Remove property">\u00D7</button>
+                  }}>\u00D7</button>
         </div>
       `)}
       <div className="prop-row prop-add">
@@ -331,164 +357,70 @@ function PropertiesEditor({ nodeId, properties, dispatch }) {
         <button className="prop-add-btn"
                 onClick=${() => {
                   if (newKey.trim()) {
-                    const updated = { ...properties, [newKey.trim()]: newVal };
-                    dispatch(nodeId, "update-properties", updated);
-                    setNewKey("");
-                    setNewVal("");
+                    dispatch(nodeId, "update-properties", { ...properties, [newKey.trim()]: newVal });
+                    setNewKey(""); setNewVal("");
                   }
-                }}
-                title="Add property">+</button>
+                }}>+</button>
       </div>
     </div>
   `;
 }
 
 function DetailPane({ node, isPreamble, dispatch, inputRefs, bodyTextareaRef }) {
-  const bodySource = isPreamble ? (node?.body || "") : (node?.body || "");
-  const [bodyText, setBodyText] = useState(bodySource);
+  const [bodyText, setBodyText] = useState(isPreamble ? (node?.body || "") : (node?.body || ""));
   const localRef = useRef(null);
 
-  // Auto-resize textarea
   useEffect(() => {
     const ta = localRef.current;
-    if (ta) {
-      ta.style.height = "auto";
-      ta.style.height = ta.scrollHeight + "px";
-    }
+    if (ta) { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; }
   }, [bodyText]);
 
   if (!node && !isPreamble) {
-    return html`
-      <div className="detail-pane">
-        <div className="detail-empty">Select an item to see details</div>
-      </div>
-    `;
+    return html`<div className="detail-pane"><div className="detail-empty">Select an item to see details</div></div>`;
   }
-
-  const handleBodyChange = (e) => {
-    setBodyText(e.target.value);
-    if (isPreamble) {
-      dispatch("preamble", "change-preamble", e.target.value);
-    } else {
-      dispatch(node.id, "change-body", e.target.value);
-    }
-  };
-
-  const handleBodyKeyDown = (e) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      const targetId = isPreamble ? "preamble" : node?.id;
-      dispatch(targetId, "focus-outline");
-    }
-  };
-
-  const title = isPreamble ? "Preamble" : (node?.title || "Untitled");
 
   return html`
     <div className="detail-pane">
-      <div className="detail-header">${title}</div>
+      <div className="detail-header">${isPreamble ? "Preamble" : (node?.title || "Untitled")}</div>
       <div className="detail-section">
         <label className="detail-label">${isPreamble ? "Content" : "Body"}</label>
         <textarea
-          ref=${(el) => {
-            localRef.current = el;
-            if (bodyTextareaRef) bodyTextareaRef.current = el;
-          }}
+          ref=${(el) => { localRef.current = el; if (bodyTextareaRef) bodyTextareaRef.current = el; }}
           className="detail-body"
           value=${bodyText}
           placeholder=${isPreamble ? "File header, #+TITLE, etc..." : "Add notes..."}
-          onChange=${handleBodyChange}
-          onKeyDown=${handleBodyKeyDown}
+          onChange=${(e) => {
+            setBodyText(e.target.value);
+            if (isPreamble) dispatch("preamble", "change-preamble", e.target.value);
+            else dispatch(node.id, "change-body", e.target.value);
+          }}
+          onKeyDown=${(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              dispatch(isPreamble ? "preamble" : node?.id, "focus-outline");
+            }
+          }}
         />
       </div>
       ${!isPreamble && html`
         <div className="detail-section">
           <label className="detail-label">Due date</label>
-          <input
-            type="date"
-            className="detail-date"
+          <input type="date" className="detail-date"
             value=${parseOrgDate(node.properties?.DEADLINE)}
             onChange=${(e) => {
               const updated = { ...(node.properties || {}) };
-              if (e.target.value) {
-                updated.DEADLINE = formatOrgDate(e.target.value);
-              } else {
-                delete updated.DEADLINE;
-              }
+              if (e.target.value) updated.DEADLINE = formatOrgDate(e.target.value);
+              else delete updated.DEADLINE;
               dispatch(node.id, "update-properties", updated);
-            }}
-          />
+            }} />
         </div>
         <div className="detail-section">
           <label className="detail-label">Properties</label>
-          <${PropertiesEditor}
-            nodeId=${node.id}
-            properties=${node.properties}
-            dispatch=${dispatch}
-          />
+          <${PropertiesEditor} nodeId=${node.id} properties=${node.properties} dispatch=${dispatch} />
         </div>
       `}
     </div>
   `;
-}
-
-// Uncollapse all ancestors of a node so it becomes visible
-function uncollapseToNode(nodes, targetId) {
-  // Returns [updatedNodes, found]
-  function walk(list) {
-    for (let i = 0; i < list.length; i++) {
-      if (list[i].id === targetId) return [list, true];
-      if (list[i].children?.length > 0) {
-        const [updated, found] = walk(list[i].children);
-        if (found) {
-          const newList = [...list];
-          newList[i] = { ...list[i], collapsed: false, children: updated };
-          return [newList, true];
-        }
-      }
-    }
-    return [list, false];
-  }
-  const [result] = walk(nodes);
-  return result;
-}
-
-// --- Agenda helpers ---
-
-function collectDatedItems(nodes, ancestors = []) {
-  const items = [];
-  for (const n of nodes) {
-    const raw = n.properties?.DEADLINE;
-    const date = parseOrgDate(raw);
-    if (date) {
-      items.push({ id: n.id, title: n.title, date, status: n.status, ancestors });
-    }
-    if (n.children?.length > 0) {
-      items.push(...collectDatedItems(n.children, [...ancestors, n.title]));
-    }
-  }
-  return items;
-}
-
-function formatDate(dateStr) {
-  try {
-    const d = new Date(dateStr + "T00:00:00");
-    return d.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
-  } catch {
-    return dateStr;
-  }
-}
-
-function isOverdue(dateStr) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const d = new Date(dateStr + "T00:00:00");
-  return d < today;
-}
-
-function isToday(dateStr) {
-  const today = new Date().toISOString().slice(0, 10);
-  return dateStr === today;
 }
 
 function AgendaView({ nodes, onSelect }) {
@@ -499,17 +431,11 @@ function AgendaView({ nodes, onSelect }) {
     return html`<div className="agenda-empty">No items with due dates</div>`;
   }
 
-  // Group by date
   const groups = [];
-  let currentDate = null;
-  let currentGroup = null;
+  let cur = null;
   for (const item of items) {
-    if (item.date !== currentDate) {
-      currentDate = item.date;
-      currentGroup = { date: item.date, items: [] };
-      groups.push(currentGroup);
-    }
-    currentGroup.items.push(item);
+    if (!cur || cur.date !== item.date) { cur = { date: item.date, items: [] }; groups.push(cur); }
+    cur.items.push(item);
   }
 
   return html`
@@ -517,13 +443,12 @@ function AgendaView({ nodes, onSelect }) {
       ${groups.map((g) => html`
         <div className="agenda-group" key=${g.date}>
           <div className=${"agenda-date" + (isOverdue(g.date) ? " overdue" : "") + (isToday(g.date) ? " today" : "")}>
-            ${formatDate(g.date)}
+            ${formatDateDisplay(g.date)}
             ${isToday(g.date) && html`<span className="agenda-badge">today</span>`}
             ${isOverdue(g.date) && html`<span className="agenda-badge overdue">overdue</span>`}
           </div>
           ${g.items.map((item) => html`
-            <div className="agenda-item" key=${item.id}
-                 onClick=${() => onSelect(item.id)}>
+            <div className="agenda-item" key=${item.id} onClick=${() => onSelect(item.id)}>
               <span className="agenda-item-title">${item.title || "Untitled"}</span>
               ${item.ancestors.length > 0 && html`
                 <span className="agenda-item-path">${item.ancestors.join(" \u203A ")}</span>
@@ -537,28 +462,20 @@ function AgendaView({ nodes, onSelect }) {
 }
 
 function handleKey(e, id, dispatch) {
-  const alt = e.altKey;
-  const shift = e.shiftKey;
-  const key = e.key;
-
+  const alt = e.altKey, shift = e.shiftKey, key = e.key;
   if (alt && key === "ArrowUp")    { e.preventDefault(); dispatch(id, "move-up"); return; }
   if (alt && key === "ArrowDown")  { e.preventDefault(); dispatch(id, "move-down"); return; }
   if (alt && key === "ArrowRight") { e.preventDefault(); dispatch(id, "indent"); return; }
   if (alt && key === "ArrowLeft")  { e.preventDefault(); dispatch(id, "outdent"); return; }
-
-  if (key === "Tab" && !shift) { e.preventDefault(); dispatch(id, "toggle"); return; }
-  if (key === "Tab" && shift)  { e.preventDefault(); dispatch(id, "toggle"); return; }
-
+  if (key === "Tab") { e.preventDefault(); dispatch(id, "toggle"); return; }
   if (key === "ArrowUp")   { e.preventDefault(); dispatch(id, "nav-up"); return; }
   if (key === "ArrowDown") { e.preventDefault(); dispatch(id, "nav-down"); return; }
-
   if (key === "Enter" && shift) { e.preventDefault(); dispatch(id, "focus-body"); return; }
-  if (key === "Enter" && !shift) { e.preventDefault(); dispatch(id, "new-sibling"); return; }
-
+  if (key === "Enter") { e.preventDefault(); dispatch(id, "new-sibling"); return; }
   if (key === "Backspace" && e.target.value === "") { e.preventDefault(); dispatch(id, "delete"); return; }
 }
 
-// --- Sync status labels ---
+// --- Sync status ---
 const SYNC_SAVED = "saved";
 const SYNC_DIRTY = "unsaved";
 const SYNC_SAVING = "saving";
@@ -567,37 +484,71 @@ const SYNC_CONFLICT = "conflict";
 
 function SyncIndicator({ status }) {
   const labels = {
-    [SYNC_SAVED]: "Saved",
-    [SYNC_DIRTY]: "Unsaved changes",
-    [SYNC_SAVING]: "Saving\u2026",
-    [SYNC_ERROR]: "Save failed \u2014 retrying",
-    [SYNC_CONFLICT]: "Conflict! Reload needed",
+    [SYNC_SAVED]: "Saved", [SYNC_DIRTY]: "Unsaved changes",
+    [SYNC_SAVING]: "Saving\u2026", [SYNC_ERROR]: "Save failed",
+    [SYNC_CONFLICT]: "Conflict \u2014 reload",
   };
-  const cls = "sync-indicator sync-" + status;
-  return html`<span className=${cls}>${labels[status] || ""}</span>`;
+  return html`<span className=${"sync-indicator sync-" + status}>${labels[status] || ""}</span>`;
 }
 
+// --- File Picker ---
+
+function FilePicker({ files, onSelect, onCreate }) {
+  const [newName, setNewName] = useState("");
+
+  return html`
+    <div className="file-picker">
+      <h2>Choose a file</h2>
+      <div className="file-list">
+        ${files.map((f) => html`
+          <div className="file-item" key=${f} onClick=${() => onSelect(f)}>
+            <span className="file-icon">\u{1F4C4}</span>
+            <span>${f}</span>
+          </div>
+        `)}
+      </div>
+      <div className="file-create">
+        <input className="file-create-input" placeholder="new-file.org"
+               value=${newName} onChange=${(e) => setNewName(e.target.value)}
+               onKeyDown=${(e) => {
+                 if (e.key === "Enter" && newName.trim()) {
+                   onCreate(newName.trim());
+                   setNewName("");
+                 }
+               }} />
+        <button className="file-create-btn" onClick=${() => {
+          if (newName.trim()) { onCreate(newName.trim()); setNewName(""); }
+        }}>Create</button>
+      </div>
+    </div>
+  `;
+}
+
+// --- App ---
+
 function App() {
+  const [files, setFiles] = useState(null);
+  const [currentFile, setCurrentFile] = useState(null);
   const [nodes, setNodes] = useState(null);
   const [preamble, setPreamble] = useState("");
-  const [version, setVersion] = useState(0);
+  const [hash, setHash] = useState("");
   const [focusedId, setFocusedId] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
   const [syncStatus, setSyncStatus] = useState(SYNC_SAVED);
-  const [view, setView] = useState("outline"); // "outline" | "agenda"
+  const [view, setView] = useState("outline");
   const pendingFocusRef = useRef(null);
   const inputRefs = useRef({});
   const bodyTextareaRef = useRef(null);
   const dirtyRef = useRef(false);
-  // Refs to always have latest state in the sync interval
   const nodesRef = useRef(null);
   const preambleRef = useRef("");
-  const versionRef = useRef(0);
+  const hashRef = useRef("");
+  const currentFileRef = useRef(null);
 
-  // Keep refs in sync
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { preambleRef.current = preamble; }, [preamble]);
-  useEffect(() => { versionRef.current = version; }, [version]);
+  useEffect(() => { hashRef.current = hash; }, [hash]);
+  useEffect(() => { currentFileRef.current = currentFile; }, [currentFile]);
 
   const markDirty = useCallback(() => {
     dirtyRef.current = true;
@@ -608,15 +559,11 @@ function App() {
   useEffect(() => {
     const handler = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "h") {
-        e.preventDefault();
-        setShowHelp((v) => !v);
-        return;
+        e.preventDefault(); setShowHelp((v) => !v); return;
       }
-      // Alt+1-9: fold to level
       if (e.altKey && e.key >= "1" && e.key <= "9") {
         e.preventDefault();
-        const level = parseInt(e.key);
-        setNodes((prev) => prev ? foldToLevel(prev, level) : prev);
+        setNodes((prev) => prev ? foldToLevel(prev, parseInt(e.key)) : prev);
         markDirty();
       }
     };
@@ -631,12 +578,7 @@ function App() {
       pendingFocusRef.current = null;
       requestAnimationFrame(() => {
         const el = inputRefs.current[id];
-        if (el) {
-          el.focus();
-          if (el.setSelectionRange) {
-            el.selectionStart = el.selectionEnd = el.value?.length || 0;
-          }
-        }
+        if (el) { el.focus(); if (el.setSelectionRange) el.selectionStart = el.selectionEnd = el.value?.length || 0; }
       });
     }
   });
@@ -646,194 +588,77 @@ function App() {
     pendingFocusRef.current = id;
   }, []);
 
-  // Load document on mount
+  // Load file list on mount
   useEffect(() => {
-    api.get("/api/doc").then((data) => {
-      const n = data.nodes || [];
-      setNodes(n);
-      setPreamble(data.preamble || "");
-      setVersion(data.version || 0);
-      const flat = flattenVisible(n);
-      if (flat.length > 0) focusNode(flat[0].id);
+    api.get("/api/files").then((data) => {
+      const f = data.files || [];
+      setFiles(f);
+      if (f.length === 1) loadFile(f[0]);
     });
+  }, []);
+
+  const loadFile = useCallback(async (name) => {
+    const data = await api.get("/api/doc/" + encodeURIComponent(name));
+    setCurrentFile(name);
+    setNodes(data.nodes || []);
+    setPreamble(data.preamble || "");
+    setHash(data.hash || "");
+    dirtyRef.current = false;
+    setSyncStatus(SYNC_SAVED);
+    const flat = flattenVisible(data.nodes || []);
+    if (flat.length > 0) focusNode(flat[0].id);
   }, [focusNode]);
 
-  // Background sync: push to server every 3 seconds when dirty
+  const handleCreateFile = useCallback(async (name) => {
+    if (!name.endsWith(".org")) name += ".org";
+    await api.post("/api/files", { filename: name });
+    const data = await api.get("/api/files");
+    setFiles(data.files || []);
+    loadFile(name);
+  }, [loadFile]);
+
+  // Background sync
   useEffect(() => {
     const interval = setInterval(async () => {
-      if (!dirtyRef.current || !nodesRef.current) return;
+      if (!dirtyRef.current || !nodesRef.current || !currentFileRef.current) return;
       dirtyRef.current = false;
       setSyncStatus(SYNC_SAVING);
       try {
-        const result = await api.put("/api/doc", {
-          version: versionRef.current,
+        const result = await api.put("/api/doc/" + encodeURIComponent(currentFileRef.current), {
+          hash: hashRef.current,
           preamble: preambleRef.current,
           nodes: nodesRef.current,
         });
-        setVersion(result.version);
-        versionRef.current = result.version;
-        setSyncStatus(SYNC_SAVED);
-      } catch (err) {
-        if (err.conflict) {
+        setHash(result.hash);
+        hashRef.current = result.hash;
+        if (result.conflict) {
           setSyncStatus(SYNC_CONFLICT);
         } else {
-          dirtyRef.current = true; // retry next cycle
-          setSyncStatus(SYNC_ERROR);
+          setSyncStatus(SYNC_SAVED);
         }
+      } catch (err) {
+        dirtyRef.current = true;
+        setSyncStatus(SYNC_ERROR);
       }
     }, 3000);
     return () => clearInterval(interval);
   }, []);
 
-  // Also sync on page unload
+  // Save on unload
   useEffect(() => {
-    const handleUnload = () => {
-      if (!dirtyRef.current || !nodesRef.current) return;
+    const handler = () => {
+      if (!dirtyRef.current || !nodesRef.current || !currentFileRef.current) return;
       const body = JSON.stringify({
-        version: versionRef.current,
-        preamble: preambleRef.current,
-        nodes: nodesRef.current,
+        hash: hashRef.current, preamble: preambleRef.current, nodes: nodesRef.current,
       });
-      navigator.sendBeacon("/api/doc", new Blob([body], { type: "application/json" }));
+      navigator.sendBeacon(
+        "/api/doc/" + encodeURIComponent(currentFileRef.current),
+        new Blob([body], { type: "application/json" })
+      );
     };
-    window.addEventListener("beforeunload", handleUnload);
-    return () => window.removeEventListener("beforeunload", handleUnload);
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
   }, []);
-
-  // Dispatch: all operations are local state mutations
-  const dispatch = useCallback((nodeId, action, value) => {
-    // Build flat list with preamble for navigation
-    const flat = [{ id: "preamble" }, ...flattenVisible(nodesRef.current || [])];
-    const idx = flat.findIndex((n) => n.id === nodeId);
-
-    if (action === "focus") {
-      setFocusedId(nodeId);
-      return;
-    }
-
-    if (action === "focus-outline") {
-      setFocusedId(nodeId);
-      requestAnimationFrame(() => {
-        const el = inputRefs.current[nodeId];
-        if (el) {
-          el.focus();
-          if (el.setSelectionRange) {
-            el.selectionStart = el.selectionEnd = el.value?.length || 0;
-          }
-        }
-      });
-      return;
-    }
-
-    if (action === "focus-body") {
-      if (bodyTextareaRef.current) bodyTextareaRef.current.focus();
-      return;
-    }
-
-    if (action === "nav-up" && idx > 0) {
-      focusNode(flat[idx - 1].id);
-      return;
-    }
-
-    if (action === "nav-down" && idx < flat.length - 1) {
-      focusNode(flat[idx + 1].id);
-      return;
-    }
-
-    // Preamble only supports nav and focus-body
-    if (nodeId === "preamble") {
-      if (action === "change-preamble") {
-        setPreamble(value);
-        markDirty();
-      }
-      return;
-    }
-
-    if (action === "change") {
-      setNodes((prev) => updateNodeField(prev, nodeId, "title", value));
-      markDirty();
-      return;
-    }
-
-    if (action === "cycle-status") {
-      setNodes((prev) => {
-        const node = findNode(prev, nodeId);
-        if (!node) return prev;
-        return updateNodeField(prev, nodeId, "status", nextStatus(node.status));
-      });
-      markDirty();
-      return;
-    }
-
-    if (action === "change-body") {
-      setNodes((prev) => updateNodeField(prev, nodeId, "body", value));
-      markDirty();
-      return;
-    }
-
-    if (action === "update-properties") {
-      setNodes((prev) => updateNodeField(prev, nodeId, "properties", value));
-      markDirty();
-      return;
-    }
-
-    if (action === "toggle") {
-      setNodes((prev) => {
-        const node = findNode(prev, nodeId);
-        if (!node) return prev;
-        return updateNodeField(prev, nodeId, "collapsed", !node.collapsed);
-      });
-      markDirty();
-      return;
-    }
-
-    if (action === "new-sibling") {
-      setNodes((prev) => {
-        const { nodes: updated, newId } = insertSiblingAfter(prev, nodeId);
-        // Schedule focus after render
-        requestAnimationFrame(() => focusNode(newId));
-        return updated;
-      });
-      markDirty();
-      return;
-    }
-
-    if (action === "delete") {
-      const prevId = idx > 1 ? flat[idx - 1].id : (flat.length > 2 ? flat[2]?.id : null);
-      setNodes((prev) => removeNode(prev, nodeId));
-      if (prevId && prevId !== "preamble") focusNode(prevId);
-      markDirty();
-      return;
-    }
-
-    if (action === "indent") {
-      setNodes((prev) => indentNode(prev, nodeId));
-      focusNode(nodeId);
-      markDirty();
-      return;
-    }
-
-    if (action === "outdent") {
-      setNodes((prev) => outdentNode(prev, nodeId));
-      focusNode(nodeId);
-      markDirty();
-      return;
-    }
-
-    if (action === "move-up") {
-      setNodes((prev) => moveNodeUp(prev, nodeId));
-      focusNode(nodeId);
-      markDirty();
-      return;
-    }
-
-    if (action === "move-down") {
-      setNodes((prev) => moveNodeDown(prev, nodeId));
-      focusNode(nodeId);
-      markDirty();
-      return;
-    }
-  }, [focusNode, markDirty]);
 
   const handleAgendaSelect = useCallback((itemId) => {
     setView("outline");
@@ -841,6 +666,88 @@ function App() {
     requestAnimationFrame(() => focusNode(itemId));
   }, [focusNode]);
 
+  // Dispatch: all operations are local state mutations
+  const dispatch = useCallback((nodeId, action, value) => {
+    const flat = [{ id: "preamble" }, ...flattenVisible(nodesRef.current || [])];
+    const idx = flat.findIndex((n) => n.id === nodeId);
+
+    if (action === "focus") { setFocusedId(nodeId); return; }
+
+    if (action === "focus-outline") {
+      setFocusedId(nodeId);
+      requestAnimationFrame(() => {
+        const el = inputRefs.current[nodeId];
+        if (el) { el.focus(); if (el.setSelectionRange) el.selectionStart = el.selectionEnd = el.value?.length || 0; }
+      });
+      return;
+    }
+
+    if (action === "focus-body") { if (bodyTextareaRef.current) bodyTextareaRef.current.focus(); return; }
+    if (action === "nav-up" && idx > 0) { focusNode(flat[idx - 1].id); return; }
+    if (action === "nav-down" && idx < flat.length - 1) { focusNode(flat[idx + 1].id); return; }
+
+    if (nodeId === "preamble") {
+      if (action === "change-preamble") { setPreamble(value); markDirty(); }
+      return;
+    }
+
+    if (action === "change") { setNodes((p) => updateNodeField(p, nodeId, "title", value)); markDirty(); return; }
+    if (action === "change-body") { setNodes((p) => updateNodeField(p, nodeId, "body", value)); markDirty(); return; }
+    if (action === "update-properties") { setNodes((p) => updateNodeField(p, nodeId, "properties", value)); markDirty(); return; }
+
+    if (action === "cycle-status") {
+      setNodes((p) => {
+        const node = findNode(p, nodeId);
+        return node ? updateNodeField(p, nodeId, "status", nextStatus(node.status)) : p;
+      });
+      markDirty(); return;
+    }
+
+    if (action === "toggle") {
+      setNodes((p) => {
+        const node = findNode(p, nodeId);
+        return node ? updateNodeField(p, nodeId, "collapsed", !node.collapsed) : p;
+      });
+      markDirty(); return;
+    }
+
+    if (action === "new-sibling") {
+      setNodes((p) => {
+        const { nodes: updated, newId } = insertSiblingAfter(p, nodeId);
+        requestAnimationFrame(() => focusNode(newId));
+        return updated;
+      });
+      markDirty(); return;
+    }
+
+    if (action === "delete") {
+      const prevId = idx > 1 ? flat[idx - 1].id : (flat.length > 2 ? flat[2]?.id : null);
+      setNodes((p) => removeNode(p, nodeId));
+      if (prevId && prevId !== "preamble") focusNode(prevId);
+      markDirty(); return;
+    }
+
+    if (action === "indent") { setNodes((p) => indentNode(p, nodeId)); focusNode(nodeId); markDirty(); return; }
+    if (action === "outdent") { setNodes((p) => outdentNode(p, nodeId)); focusNode(nodeId); markDirty(); return; }
+    if (action === "move-up") { setNodes((p) => moveNodeUp(p, nodeId)); focusNode(nodeId); markDirty(); return; }
+    if (action === "move-down") { setNodes((p) => moveNodeDown(p, nodeId)); focusNode(nodeId); markDirty(); return; }
+  }, [focusNode, markDirty]);
+
+  // Loading state
+  if (files === null) return html`<div className="empty">Loading...</div>`;
+
+  // File picker (no file selected)
+  if (!currentFile) {
+    return html`
+      <div>
+        <${Header} onHelp=${() => setShowHelp(true)} syncStatus=${syncStatus}
+                    view=${view} setView=${setView} currentFile=${null} />
+        <${FilePicker} files=${files} onSelect=${loadFile} onCreate=${handleCreateFile} />
+      </div>
+    `;
+  }
+
+  // Document loading
   if (nodes === null) return html`<div className="empty">Loading...</div>`;
 
   const isPreambleFocused = focusedId === "preamble";
@@ -848,57 +755,25 @@ function App() {
   const detailNode = isPreambleFocused ? { body: preamble } : focusedNode;
   const detailKey = isPreambleFocused ? "preamble" : focusedId;
 
-  if (nodes.length === 0) {
-    return html`
-      <div>
-        <${Header} onHelp=${() => setShowHelp(true)} syncStatus=${syncStatus} view=${view} setView=${setView} />
-        <div className="app-layout">
-          <div className="outline-pane">
-            <${PreambleRow} focused=${isPreambleFocused} dispatch=${dispatch} inputRefs=${inputRefs} />
-            <div className="empty"
-                 onClick=${() => {
-                   const nn = newNode();
-                   setNodes([nn]);
-                   focusNode(nn.id);
-                   markDirty();
-                 }}>
-              Click or press any key to start
-            </div>
-          </div>
-          <${DetailPane}
-            key=${detailKey}
-            node=${detailNode}
-            isPreamble=${isPreambleFocused}
-            dispatch=${dispatch}
-            inputRefs=${inputRefs}
-            bodyTextareaRef=${bodyTextareaRef}
-          />
-        </div>
-        <${Hints} />
-      </div>
-    `;
-  }
-
   return html`
     <div>
-      <${Header} onHelp=${() => setShowHelp(true)} syncStatus=${syncStatus} view=${view} setView=${setView} />
+      <${Header} onHelp=${() => setShowHelp(true)} syncStatus=${syncStatus}
+                  view=${view} setView=${setView} currentFile=${currentFile}
+                  onBack=${() => { setCurrentFile(null); setNodes(null); }} />
       ${showHelp && html`<${HelpPanel} onClose=${() => setShowHelp(false)} />`}
       <div className="app-layout">
         ${view === "outline" && html`
           <div className="outline-pane">
             <${PreambleRow} focused=${isPreambleFocused} dispatch=${dispatch} inputRefs=${inputRefs} />
-            ${nodes.map(
-              (node) => html`
-                <${OutlineNode}
-                  key=${node.id}
-                  node=${node}
-                  focusedId=${focusedId}
-                  dispatch=${dispatch}
-                  inputRefs=${inputRefs}
-                  depth=${0}
-                />
-              `
-            )}
+            ${nodes.length === 0 ? html`
+              <div className="empty" onClick=${() => {
+                const nn = newNode();
+                setNodes([nn]); focusNode(nn.id); markDirty();
+              }}>Click or press any key to start</div>
+            ` : nodes.map((node) => html`
+              <${OutlineNode} key=${node.id} node=${node} focusedId=${focusedId}
+                dispatch=${dispatch} inputRefs=${inputRefs} depth=${0} />
+            `)}
           </div>
         `}
         ${view === "agenda" && html`
@@ -906,30 +781,33 @@ function App() {
             <${AgendaView} nodes=${nodes} onSelect=${handleAgendaSelect} />
           </div>
         `}
-        <${DetailPane}
-          key=${detailKey}
-          node=${detailNode}
-          isPreamble=${isPreambleFocused}
-          dispatch=${dispatch}
-          inputRefs=${inputRefs}
-          bodyTextareaRef=${bodyTextareaRef}
-        />
+        <${DetailPane} key=${detailKey} node=${detailNode} isPreamble=${isPreambleFocused}
+          dispatch=${dispatch} inputRefs=${inputRefs} bodyTextareaRef=${bodyTextareaRef} />
       </div>
       <${Hints} />
     </div>
   `;
 }
 
-function Header({ onHelp, syncStatus, view, setView }) {
+function Header({ onHelp, syncStatus, view, setView, currentFile, onBack }) {
   return html`
     <header>
-      <h1>torg</h1>
-      <div className="view-toggle">
-        <button className=${"view-tab" + (view === "outline" ? " active" : "")}
-                onClick=${() => setView("outline")}>Outline</button>
-        <button className=${"view-tab" + (view === "agenda" ? " active" : "")}
-                onClick=${() => setView("agenda")}>Agenda</button>
+      <div className="header-left">
+        <h1>torg</h1>
+        ${currentFile && html`
+          <button className="file-back-btn" onClick=${onBack} title="Switch file">
+            ${currentFile}
+          </button>
+        `}
       </div>
+      ${currentFile && html`
+        <div className="view-toggle">
+          <button className=${"view-tab" + (view === "outline" ? " active" : "")}
+                  onClick=${() => setView("outline")}>Outline</button>
+          <button className=${"view-tab" + (view === "agenda" ? " active" : "")}
+                  onClick=${() => setView("agenda")}>Agenda</button>
+        </div>
+      `}
       <div className="header-right">
         <${SyncIndicator} status=${syncStatus} />
         <button className="help-btn" onClick=${onHelp} title="Keyboard shortcuts (Ctrl+H)">?</button>
@@ -940,9 +818,7 @@ function Header({ onHelp, syncStatus, view, setView }) {
 
 function HelpPanel({ onClose }) {
   useEffect(() => {
-    const handler = (e) => {
-      if (e.key === "Escape") onClose();
-    };
+    const handler = (e) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [onClose]);
@@ -958,7 +834,7 @@ function HelpPanel({ onClose }) {
           <${HelpSection} title="Navigation">
             <${HelpRow} keys="\u2191 / \u2193" desc="Move between items" />
             <${HelpRow} keys="Enter" desc="Create new item below" />
-            <${HelpRow} keys="Shift + Enter" desc="Focus body / preamble text" />
+            <${HelpRow} keys="Shift + Enter" desc="Focus body / preamble" />
             <${HelpRow} keys="Escape" desc="Return to outline" />
             <${HelpRow} keys="Backspace" desc="Delete empty item" />
           <//>
@@ -970,12 +846,10 @@ function HelpPanel({ onClose }) {
           <//>
           <${HelpSection} title="Folding">
             <${HelpRow} keys="Tab" desc="Fold / unfold children" />
-            <${HelpRow} keys="Click bullet" desc="Fold / unfold children" />
             <${HelpRow} keys="Alt + 1\u20139" desc="Fold to level N" />
           <//>
           <${HelpSection} title="Other">
             <${HelpRow} keys="Ctrl + H" desc="Toggle this help" />
-            <${HelpRow} keys="Esc" desc="Close help" />
           <//>
         </div>
       </div>
@@ -984,21 +858,11 @@ function HelpPanel({ onClose }) {
 }
 
 function HelpSection({ title, children }) {
-  return html`
-    <div className="help-section">
-      <h3>${title}</h3>
-      <div className="help-rows">${children}</div>
-    </div>
-  `;
+  return html`<div className="help-section"><h3>${title}</h3><div className="help-rows">${children}</div></div>`;
 }
 
 function HelpRow({ keys, desc }) {
-  return html`
-    <div className="help-row">
-      <span className="help-keys">${keys}</span>
-      <span className="help-desc">${desc}</span>
-    </div>
-  `;
+  return html`<div className="help-row"><span className="help-keys">${keys}</span><span className="help-desc">${desc}</span></div>`;
 }
 
 function Hints() {

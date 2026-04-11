@@ -6,8 +6,8 @@ help: ## Show this help
 build: ## Build the torg binary
 	go build -o torg .
 
-run: build ## Build and run with test.org
-	./torg -file test.org
+run: build ## Build and run with current directory
+	./torg .
 
 test: ## Run tests
 	go test ./...

@@ -43,6 +43,102 @@ header h1 {
   text-transform: uppercase;
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.file-back-btn {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.file-back-btn:hover {
+  background: var(--focused-bg);
+  border-color: var(--bullet);
+}
+
+/* File picker */
+.file-picker {
+  max-width: 400px;
+  margin: 48px auto;
+}
+
+.file-picker h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 16px;
+}
+
+.file-list {
+  margin-bottom: 16px;
+}
+
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.file-item:hover {
+  background: var(--focused-bg);
+}
+
+.file-icon {
+  font-size: 18px;
+}
+
+.file-create {
+  display: flex;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.file-create-input {
+  flex: 1;
+  font-family: inherit;
+  font-size: 14px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+
+.file-create-input:focus {
+  border-color: var(--bullet-active);
+}
+
+.file-create-btn {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.file-create-btn:hover {
+  background: var(--focused-bg);
+}
+
 .header-right {
   display: flex;
   align-items: center;

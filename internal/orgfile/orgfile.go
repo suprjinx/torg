@@ -1,134 +1,185 @@
 package orgfile
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
-	"regexp"
-	"strconv"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/niklasfasching/go-org/org"
+	"github.com/suprjinx/torg/internal/git"
 )
 
-// Store manages reading and writing an org file with concurrency safety.
-// UI metadata (collapsed state) is stored in a .meta.json sidecar file.
+// Store manages a directory of org files with hash-based change detection.
 type Store struct {
-	path     string
-	metaPath string
-	mu       sync.RWMutex
-	doc      *org.Document
-	meta     Meta
-	preamble string // user-visible preamble (without version line)
-	version  int    // document version for conflict detection
+	dir    string
+	mu     sync.RWMutex
+	active map[string]*FileState
 }
 
-// Meta holds UI state that doesn't belong in the org file.
+// FileState holds the parsed state and merge base for a single file.
+type FileState struct {
+	Doc         *org.Document
+	Preamble    string
+	Meta        Meta
+	BaseHash    string // SHA-256 of content at time of load/last save
+	BaseContent string // content at time of load/last save (merge ancestor)
+}
+
+// Meta holds UI state stored in a sidecar file.
 type Meta struct {
 	Collapsed map[string]bool `json:"collapsed,omitempty"`
 }
 
-// NewStore opens (or creates) an org file and parses it into memory.
-func NewStore(path string) (*Store, error) {
-	s := &Store{
-		path:     path,
-		metaPath: path + ".meta.json",
-	}
-	if err := s.Load(); err != nil {
+// NewStore opens a directory, ensures it's a git repo, and commits current state.
+func NewStore(dir string) (*Store, error) {
+	info, err := os.Stat(dir)
+	if err != nil {
 		return nil, err
 	}
-	return s, nil
+	if !info.IsDir() {
+		return nil, os.ErrInvalid
+	}
+
+	if err := git.EnsureRepo(dir); err != nil {
+		return nil, err
+	}
+
+	// Commit current state as base snapshot
+	git.CommitAll(dir, "torg: snapshot base")
+
+	return &Store{
+		dir:    dir,
+		active: make(map[string]*FileState),
+	}, nil
 }
 
-// Load reads and parses the org file and sidecar from disk.
-func (s *Store) Load() error {
+// Dir returns the directory path.
+func (s *Store) Dir() string { return s.dir }
+
+// ListFiles returns sorted .org filenames in the directory.
+func (s *Store) ListFiles() ([]string, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".org") {
+			files = append(files, e.Name())
+		}
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// LoadFile reads and parses an org file, storing its content as the merge base.
+func (s *Store) LoadFile(name string) (*FileState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.loadLocked()
-}
 
-func (s *Store) loadLocked() error {
-	data, err := os.ReadFile(s.path)
-	if os.IsNotExist(err) {
-		if err := os.WriteFile(s.path, []byte(""), 0644); err != nil {
-			return err
-		}
-		data = []byte("")
-	} else if err != nil {
-		return err
+	path := filepath.Join(s.dir, name)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
 	}
 
-	raw := string(data)
-	rawPreamble := extractPreamble(raw)
-	s.version, s.preamble = parseVersionFromPreamble(rawPreamble)
+	content := string(data)
+	preamble := strings.TrimRight(extractPreamble(content), "\n")
 
 	conf := org.New()
-	s.doc = conf.Parse(strings.NewReader(raw), s.path)
+	doc := conf.Parse(strings.NewReader(content), path)
 
-	// Load sidecar metadata
-	s.meta = Meta{Collapsed: make(map[string]bool)}
-	if metaData, err := os.ReadFile(s.metaPath); err == nil {
-		json.Unmarshal(metaData, &s.meta)
-		if s.meta.Collapsed == nil {
-			s.meta.Collapsed = make(map[string]bool)
+	meta := loadMeta(path + ".meta.json")
+
+	fs := &FileState{
+		Doc:         doc,
+		Preamble:    preamble,
+		Meta:        meta,
+		BaseHash:    contentHash(content),
+		BaseContent: content,
+	}
+	s.active[name] = fs
+	return fs, nil
+}
+
+// SaveFile writes content to disk with hash-based conflict detection.
+// If the file changed on disk since our base, performs a three-way merge.
+// Returns the new hash and whether conflict markers are present.
+func (s *Store) SaveFile(name, content string) (newHash string, conflict bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := filepath.Join(s.dir, name)
+	fs := s.active[name]
+
+	// Read what's currently on disk
+	diskData, diskErr := os.ReadFile(path)
+	if diskErr != nil && !os.IsNotExist(diskErr) {
+		return "", false, diskErr
+	}
+	diskContent := string(diskData)
+	diskHash := contentHash(diskContent)
+
+	// Did the file change externally since we last loaded/saved?
+	if fs != nil && diskHash != fs.BaseHash {
+		// External edit detected — three-way merge
+		merged, hasConflicts, mergeErr := git.MergeFile(content, fs.BaseContent, diskContent)
+		if mergeErr != nil {
+			return "", false, mergeErr
 		}
-	}
-
-	return nil
-}
-
-// Save writes the org content to disk, then re-parses.
-func (s *Store) Save(content string) error {
-	if err := os.WriteFile(s.path, []byte(content), 0644); err != nil {
-		return err
-	}
-	return s.loadLocked()
-}
-
-// SaveMeta writes the sidecar metadata to disk.
-func (s *Store) SaveMeta(collapsed map[string]bool) error {
-	s.meta.Collapsed = collapsed
-	data, err := json.Marshal(s.meta)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(s.metaPath, data, 0644)
-}
-
-// Doc returns the parsed document.
-func (s *Store) Doc() *org.Document { return s.doc }
-
-// Collapsed returns the collapsed state map.
-func (s *Store) Collapsed() map[string]bool { return s.meta.Collapsed }
-
-func (s *Store) RLock()   { s.mu.RLock() }
-func (s *Store) RUnlock() { s.mu.RUnlock() }
-func (s *Store) Lock()    { s.mu.Lock() }
-func (s *Store) Unlock()  { s.mu.Unlock() }
-
-func (s *Store) Path() string        { return s.path }
-func (s *Store) Version() int        { return s.version }
-func (s *Store) Preamble() string    { return s.preamble }
-
-// BuildPreamble constructs the full preamble string for writing to disk,
-// including the version line and user preamble.
-func BuildPreamble(version int, userPreamble string) string {
-	var b strings.Builder
-	b.WriteString("#+TORG_VERSION: ")
-	b.WriteString(strconv.Itoa(version))
-	b.WriteString("\n")
-	if userPreamble != "" {
-		p := userPreamble
-		if !strings.HasSuffix(p, "\n") {
-			p += "\n"
+		if err := os.WriteFile(path, []byte(merged), 0644); err != nil {
+			return "", false, err
 		}
-		b.WriteString(p)
+		h := contentHash(merged)
+		fs.BaseHash = h
+		fs.BaseContent = merged
+		fs.Doc = parseOrg(merged, path)
+		fs.Preamble = strings.TrimRight(extractPreamble(merged), "\n")
+		return h, hasConflicts, nil
 	}
-	return b.String()
+
+	// No external changes — just overwrite
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return "", false, err
+	}
+	h := contentHash(content)
+	if fs != nil {
+		fs.BaseHash = h
+		fs.BaseContent = content
+		fs.Doc = parseOrg(content, path)
+		fs.Preamble = strings.TrimRight(extractPreamble(content), "\n")
+	}
+	return h, false, nil
 }
 
-// extractPreamble returns all text before the first org heading line,
-// including the trailing newline so it can be directly prepended to heading output.
+// CreateFile creates a new empty org file.
+func (s *Store) CreateFile(name string) error {
+	path := filepath.Join(s.dir, name)
+	if _, err := os.Stat(path); err == nil {
+		return os.ErrExist
+	}
+	return os.WriteFile(path, []byte(""), 0644)
+}
+
+// SaveMeta writes collapsed state to the sidecar file.
+func (s *Store) SaveMeta(name string, collapsed map[string]bool) {
+	path := filepath.Join(s.dir, name) + ".meta.json"
+	data, _ := json.Marshal(Meta{Collapsed: collapsed})
+	os.WriteFile(path, data, 0644)
+}
+
+// --- helpers ---
+
+func contentHash(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(h[:])
+}
+
 func extractPreamble(content string) string {
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
@@ -139,21 +190,21 @@ func extractPreamble(content string) string {
 			return strings.Join(lines[:i], "\n") + "\n"
 		}
 	}
-	return content // no headings at all
+	return content
 }
 
-var versionRe = regexp.MustCompile(`(?m)^#\+TORG_VERSION:\s*(\d+)\s*$`)
+func parseOrg(content, path string) *org.Document {
+	conf := org.New()
+	return conf.Parse(strings.NewReader(content), path)
+}
 
-// parseVersionFromPreamble extracts the version number and returns the
-// preamble with the version line removed. If no version line, returns 0.
-func parseVersionFromPreamble(preamble string) (int, string) {
-	m := versionRe.FindStringSubmatch(preamble)
-	version := 0
-	if len(m) >= 2 {
-		version, _ = strconv.Atoi(m[1])
+func loadMeta(path string) Meta {
+	meta := Meta{Collapsed: make(map[string]bool)}
+	if data, err := os.ReadFile(path); err == nil {
+		json.Unmarshal(data, &meta)
+		if meta.Collapsed == nil {
+			meta.Collapsed = make(map[string]bool)
+		}
 	}
-	cleaned := versionRe.ReplaceAllString(preamble, "")
-	// Remove leading/trailing blank lines left over
-	cleaned = strings.TrimRight(cleaned, "\n")
-	return version, cleaned
+	return meta
 }
