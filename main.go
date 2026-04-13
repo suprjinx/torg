@@ -64,7 +64,7 @@ func main() {
 		for {
 			select {
 			case <-idleTimer.C:
-				if err := git.CommitAll(dir, git.AutoSaveMessage()); err != nil {
+				if err := store.CommitCurrent(git.AutoSaveMessage()); err != nil {
 					log.Printf("idle commit: %v", err)
 				}
 			case <-ctx.Done():
@@ -96,7 +96,7 @@ func main() {
 	srv.Shutdown(shutdownCtx)
 
 	// Final commit on shutdown
-	if err := git.CommitAll(dir, git.ShutdownMessage()); err != nil {
+	if err := store.CommitCurrent(git.ShutdownMessage()); err != nil {
 		log.Printf("shutdown commit: %v", err)
 	}
 }

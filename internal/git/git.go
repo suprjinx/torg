@@ -26,19 +26,42 @@ func EnsureRepo(dir string) error {
 		return fmt.Errorf("git init: %w", err)
 	}
 	// Add any existing org files
+	// Only add org files, not everything in the directory
 	run(dir, "add", "*.org")
 	run(dir, "commit", "-m", "torg: initial commit", "--allow-empty")
+	// Ignore meta files
+	run(dir, "config", "core.excludesFile", "")
 	return nil
 }
 
-// CommitAll stages all changes and commits if there's anything to commit.
-func CommitAll(dir, message string) error {
-	out, _ := run(dir, "status", "--porcelain")
+// CommitFile stages and commits a single file if it has changes.
+func CommitFile(dir, filename, message string) error {
+	// Check if this specific file has changes
+	out, _ := run(dir, "status", "--porcelain", "--", filename)
 	if out == "" {
 		return nil
 	}
-	if _, err := run(dir, "add", "-A"); err != nil {
+	if _, err := run(dir, "add", "--", filename); err != nil {
 		return fmt.Errorf("git add: %w", err)
+	}
+	if _, err := run(dir, "commit", "-m", message); err != nil {
+		return fmt.Errorf("git commit: %w", err)
+	}
+	return nil
+}
+
+// CommitFiles stages and commits specific files if any have changes.
+func CommitFiles(dir string, filenames []string, message string) error {
+	anyChanged := false
+	for _, f := range filenames {
+		out, _ := run(dir, "status", "--porcelain", "--", f)
+		if out != "" {
+			run(dir, "add", "--", f)
+			anyChanged = true
+		}
+	}
+	if !anyChanged {
+		return nil
 	}
 	if _, err := run(dir, "commit", "-m", message); err != nil {
 		return fmt.Errorf("git commit: %w", err)

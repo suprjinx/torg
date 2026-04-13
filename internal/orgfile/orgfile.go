@@ -16,9 +16,10 @@ import (
 
 // Store manages a directory of org files with hash-based change detection.
 type Store struct {
-	dir    string
-	mu     sync.RWMutex
-	active map[string]*FileState
+	dir         string
+	mu          sync.RWMutex
+	active      map[string]*FileState
+	currentFile string // the file currently being edited
 }
 
 // FileState holds the parsed state and merge base for a single file.
@@ -48,9 +49,6 @@ func NewStore(dir string) (*Store, error) {
 	if err := git.EnsureRepo(dir); err != nil {
 		return nil, err
 	}
-
-	// Commit current state as base snapshot
-	git.CommitAll(dir, "torg: snapshot base")
 
 	return &Store{
 		dir:    dir,
@@ -96,6 +94,9 @@ func (s *Store) LoadFile(name string) (*FileState, error) {
 
 	meta := loadMeta(path + ".meta.json")
 
+	// Commit current disk state as merge base before editing
+	git.CommitFile(s.dir, name, "torg: snapshot base for "+name)
+
 	fs := &FileState{
 		Doc:         doc,
 		Preamble:    preamble,
@@ -104,6 +105,7 @@ func (s *Store) LoadFile(name string) (*FileState, error) {
 		BaseContent: content,
 	}
 	s.active[name] = fs
+	s.currentFile = name
 	return fs, nil
 }
 
@@ -171,6 +173,17 @@ func (s *Store) SaveMeta(name string, collapsed map[string]bool) {
 	path := filepath.Join(s.dir, name) + ".meta.json"
 	data, _ := json.Marshal(Meta{Collapsed: collapsed})
 	os.WriteFile(path, data, 0644)
+}
+
+// CommitCurrent commits the currently active file to git.
+func (s *Store) CommitCurrent(message string) error {
+	s.mu.RLock()
+	name := s.currentFile
+	s.mu.RUnlock()
+	if name == "" {
+		return nil
+	}
+	return git.CommitFile(s.dir, name, message)
 }
 
 // --- helpers ---
