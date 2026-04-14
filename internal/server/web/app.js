@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import htm from "htm";
+import * as tree from "./tree.js";
 
 const html = htm.bind(React.createElement);
 
@@ -32,206 +33,13 @@ const api = {
   },
 };
 
-// --- Org date helpers ---
-
-const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-function formatOrgDate(isoDate) {
-  if (!isoDate) return "";
-  const d = new Date(isoDate + "T00:00:00");
-  return `<${isoDate} ${DAYS[d.getDay()]}>`;
-}
-
-function parseOrgDate(orgDate) {
-  if (!orgDate) return "";
-  const m = orgDate.match(/(\d{4}-\d{2}-\d{2})/);
-  return m ? m[1] : "";
-}
-
-// --- Local ID generator ---
-
-let _nextId = 1;
-function newId() {
-  return `n${_nextId++}`;
-}
-
-// --- Tree helpers ---
-
-function flattenVisible(nodes) {
-  const result = [];
-  function walk(list) {
-    for (const n of list) {
-      result.push(n);
-      if (n.children?.length > 0 && !n.collapsed) walk(n.children);
-    }
-  }
-  walk(nodes || []);
-  return result;
-}
-
-function findNode(nodes, id) {
-  for (const n of nodes) {
-    if (n.id === id) return n;
-    if (n.children?.length > 0) {
-      const found = findNode(n.children, id);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-function newNode(title = "") {
-  return {
-    id: newId(),
-    title,
-    body: "",
-    status: "",
-    tags: [],
-    properties: {},
-    children: [],
-    collapsed: false,
-  };
-}
-
-// Fold tree to a given depth
-function foldToLevel(nodes, level, depth = 1) {
-  return nodes.map((n) => ({
-    ...n,
-    collapsed: n.children?.length > 0 && depth >= level,
-    children: n.children?.length > 0 ? foldToLevel(n.children, level, depth + 1) : n.children,
-  }));
-}
-
-function updateNodeField(nodes, nodeId, field, value) {
-  return nodes.map((n) => {
-    if (n.id === nodeId) return { ...n, [field]: value };
-    if (n.children?.length > 0) return { ...n, children: updateNodeField(n.children, nodeId, field, value) };
-    return n;
-  });
-}
-
-function findParentInfo(nodes, id, parent = null) {
-  for (let i = 0; i < nodes.length; i++) {
-    if (nodes[i].id === id) return { parent, parentList: nodes, index: i };
-    if (nodes[i].children?.length > 0) {
-      const found = findParentInfo(nodes[i].children, id, nodes[i]);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-function insertSiblingAfter(nodes, afterId) {
-  const nn = newNode();
-  return { nodes: insertAfter(nodes, afterId, nn), newId: nn.id };
-}
-
-function insertAfter(nodes, afterId, nn) {
-  const result = [];
-  for (const n of nodes) {
-    if (n.id === afterId) {
-      result.push({ ...n, children: n.children ? [...n.children] : [] });
-      result.push(nn);
-    } else {
-      const updated = n.children?.length > 0 ? insertAfter(n.children, afterId, nn) : n.children;
-      result.push(updated !== n.children ? { ...n, children: updated } : n);
-    }
-  }
-  return result;
-}
-
-function removeNode(nodes, id) {
-  const result = [];
-  for (const n of nodes) {
-    if (n.id === id) continue;
-    const updated = n.children?.length > 0 ? removeNode(n.children, id) : n.children;
-    result.push(updated !== n.children ? { ...n, children: updated } : n);
-  }
-  return result;
-}
-
-function indentNode(nodes, id) {
-  const info = findParentInfo(nodes, id);
-  if (!info || info.index === 0) return nodes;
-  const prevSibling = info.parentList[info.index - 1];
-  const node = info.parentList[info.index];
-  let result = removeNode(nodes, id);
-  result = mapNode(result, prevSibling.id, (n) => ({
-    ...n, collapsed: false, children: [...(n.children || []), { ...node }],
-  }));
-  return result;
-}
-
-function outdentNode(nodes, id) {
-  const info = findParentInfo(nodes, id);
-  if (!info || !info.parent) return nodes;
-  const node = info.parentList[info.index];
-  let result = removeNode(nodes, id);
-  result = insertAfter(result, info.parent.id, { ...node });
-  return result;
-}
-
-function moveNodeUp(nodes, id) {
-  const info = findParentInfo(nodes, id);
-  if (!info || info.index === 0) return nodes;
-  const list = [...info.parentList];
-  [list[info.index - 1], list[info.index]] = [list[info.index], list[info.index - 1]];
-  if (!info.parent) return list;
-  return mapNode(nodes, info.parent.id, (n) => ({ ...n, children: list }));
-}
-
-function moveNodeDown(nodes, id) {
-  const info = findParentInfo(nodes, id);
-  if (!info || info.index >= info.parentList.length - 1) return nodes;
-  const list = [...info.parentList];
-  [list[info.index], list[info.index + 1]] = [list[info.index + 1], list[info.index]];
-  if (!info.parent) return list;
-  return mapNode(nodes, info.parent.id, (n) => ({ ...n, children: list }));
-}
-
-function mapNode(nodes, id, fn) {
-  return nodes.map((n) => {
-    if (n.id === id) return fn(n);
-    if (n.children?.length > 0) {
-      const updated = mapNode(n.children, id, fn);
-      return updated !== n.children ? { ...n, children: updated } : n;
-    }
-    return n;
-  });
-}
-
-function uncollapseToNode(nodes, targetId) {
-  function walk(list) {
-    for (let i = 0; i < list.length; i++) {
-      if (list[i].id === targetId) return [list, true];
-      if (list[i].children?.length > 0) {
-        const [updated, found] = walk(list[i].children);
-        if (found) {
-          const newList = [...list];
-          newList[i] = { ...list[i], collapsed: false, children: updated };
-          return [newList, true];
-        }
-      }
-    }
-    return [list, false];
-  }
-  const [result] = walk(nodes);
-  return result;
-}
-
-const STATUS_CYCLE = ["", "TODO", "DONE"];
-function nextStatus(current) {
-  const idx = STATUS_CYCLE.indexOf(current || "");
-  return STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length];
-}
-
 // --- Agenda helpers ---
 
 function collectDatedItems(nodes, ancestors = []) {
   const items = [];
   for (const n of nodes) {
     const raw = n.properties?.DEADLINE;
-    const date = parseOrgDate(raw);
+    const date = tree.parseOrgDate(raw);
     if (date) {
       items.push({ id: n.id, title: n.title, date, status: n.status, ancestors });
     }
@@ -406,10 +214,10 @@ function DetailPane({ node, isPreamble, dispatch, inputRefs, bodyTextareaRef }) 
         <div className="detail-section">
           <label className="detail-label">Due date</label>
           <input type="date" className="detail-date"
-            value=${parseOrgDate(node.properties?.DEADLINE)}
+            value=${tree.parseOrgDate(node.properties?.DEADLINE)}
             onChange=${(e) => {
               const updated = { ...(node.properties || {}) };
-              if (e.target.value) updated.DEADLINE = formatOrgDate(e.target.value);
+              if (e.target.value) updated.DEADLINE = tree.formatOrgDate(e.target.value);
               else delete updated.DEADLINE;
               dispatch(node.id, "update-properties", updated);
             }} />
@@ -563,7 +371,7 @@ function App() {
       }
       if (e.altKey && e.key >= "1" && e.key <= "9") {
         e.preventDefault();
-        setNodes((prev) => prev ? foldToLevel(prev, parseInt(e.key)) : prev);
+        setNodes((prev) => prev ? tree.foldToLevel(prev, parseInt(e.key)) : prev);
         markDirty();
       }
     };
@@ -605,7 +413,7 @@ function App() {
     setHash(data.hash || "");
     dirtyRef.current = false;
     setSyncStatus(SYNC_SAVED);
-    const flat = flattenVisible(data.nodes || []);
+    const flat = tree.flattenVisible(data.nodes || []);
     if (flat.length > 0) focusNode(flat[0].id);
   }, [focusNode]);
 
@@ -662,13 +470,13 @@ function App() {
 
   const handleAgendaSelect = useCallback((itemId) => {
     setView("outline");
-    setNodes((prev) => uncollapseToNode(prev, itemId));
+    setNodes((prev) => tree.uncollapseToNode(prev, itemId));
     requestAnimationFrame(() => focusNode(itemId));
   }, [focusNode]);
 
   // Dispatch: all operations are local state mutations
   const dispatch = useCallback((nodeId, action, value) => {
-    const flat = [{ id: "preamble" }, ...flattenVisible(nodesRef.current || [])];
+    const flat = [{ id: "preamble" }, ...tree.flattenVisible(nodesRef.current || [])];
     const idx = flat.findIndex((n) => n.id === nodeId);
 
     if (action === "focus") { setFocusedId(nodeId); return; }
@@ -691,29 +499,29 @@ function App() {
       return;
     }
 
-    if (action === "change") { setNodes((p) => updateNodeField(p, nodeId, "title", value)); markDirty(); return; }
-    if (action === "change-body") { setNodes((p) => updateNodeField(p, nodeId, "body", value)); markDirty(); return; }
-    if (action === "update-properties") { setNodes((p) => updateNodeField(p, nodeId, "properties", value)); markDirty(); return; }
+    if (action === "change") { setNodes((p) => tree.updateNodeField(p, nodeId, "title", value)); markDirty(); return; }
+    if (action === "change-body") { setNodes((p) => tree.updateNodeField(p, nodeId, "body", value)); markDirty(); return; }
+    if (action === "update-properties") { setNodes((p) => tree.updateNodeField(p, nodeId, "properties", value)); markDirty(); return; }
 
     if (action === "cycle-status") {
       setNodes((p) => {
-        const node = findNode(p, nodeId);
-        return node ? updateNodeField(p, nodeId, "status", nextStatus(node.status)) : p;
+        const node = tree.findNode(p, nodeId);
+        return node ? tree.updateNodeField(p, nodeId, "status", tree.nextStatus(node.status)) : p;
       });
       markDirty(); return;
     }
 
     if (action === "toggle") {
       setNodes((p) => {
-        const node = findNode(p, nodeId);
-        return node ? updateNodeField(p, nodeId, "collapsed", !node.collapsed) : p;
+        const node = tree.findNode(p, nodeId);
+        return node ? tree.updateNodeField(p, nodeId, "collapsed", !node.collapsed) : p;
       });
       markDirty(); return;
     }
 
     if (action === "new-sibling") {
       setNodes((p) => {
-        const { nodes: updated, newId } = insertSiblingAfter(p, nodeId);
+        const { nodes: updated, newId } = tree.insertSiblingAfter(p, nodeId);
         requestAnimationFrame(() => focusNode(newId));
         return updated;
       });
@@ -722,15 +530,15 @@ function App() {
 
     if (action === "delete") {
       const prevId = idx > 1 ? flat[idx - 1].id : (flat.length > 2 ? flat[2]?.id : null);
-      setNodes((p) => removeNode(p, nodeId));
+      setNodes((p) => tree.removeNode(p, nodeId));
       if (prevId && prevId !== "preamble") focusNode(prevId);
       markDirty(); return;
     }
 
-    if (action === "indent") { setNodes((p) => indentNode(p, nodeId)); focusNode(nodeId); markDirty(); return; }
-    if (action === "outdent") { setNodes((p) => outdentNode(p, nodeId)); focusNode(nodeId); markDirty(); return; }
-    if (action === "move-up") { setNodes((p) => moveNodeUp(p, nodeId)); focusNode(nodeId); markDirty(); return; }
-    if (action === "move-down") { setNodes((p) => moveNodeDown(p, nodeId)); focusNode(nodeId); markDirty(); return; }
+    if (action === "indent") { setNodes((p) => tree.indentNode(p, nodeId)); focusNode(nodeId); markDirty(); return; }
+    if (action === "outdent") { setNodes((p) => tree.outdentNode(p, nodeId)); focusNode(nodeId); markDirty(); return; }
+    if (action === "move-up") { setNodes((p) => tree.moveNodeUp(p, nodeId)); focusNode(nodeId); markDirty(); return; }
+    if (action === "move-down") { setNodes((p) => tree.moveNodeDown(p, nodeId)); focusNode(nodeId); markDirty(); return; }
   }, [focusNode, markDirty]);
 
   // Loading state
@@ -751,7 +559,7 @@ function App() {
   if (nodes === null) return html`<div className="empty">Loading...</div>`;
 
   const isPreambleFocused = focusedId === "preamble";
-  const focusedNode = (!isPreambleFocused && focusedId) ? findNode(nodes, focusedId) : null;
+  const focusedNode = (!isPreambleFocused && focusedId) ? tree.findNode(nodes, focusedId) : null;
   const detailNode = isPreambleFocused ? { body: preamble } : focusedNode;
   const detailKey = isPreambleFocused ? "preamble" : focusedId;
 
@@ -767,7 +575,7 @@ function App() {
             <${PreambleRow} focused=${isPreambleFocused} dispatch=${dispatch} inputRefs=${inputRefs} />
             ${nodes.length === 0 ? html`
               <div className="empty" onClick=${() => {
-                const nn = newNode();
+                const nn = tree.newNode();
                 setNodes([nn]); focusNode(nn.id); markDirty();
               }}>Click or press any key to start</div>
             ` : nodes.map((node) => html`
