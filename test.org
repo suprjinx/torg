@@ -44,3 +44,22 @@ I have multiple lines
 :ADD: another
 :END:
 *** Implement frontend
+
+* starting some new stuff
+** I want to know
+** how well
+** this will 
+** do with 
+*** outling?
+*** note taking?
+*** setting schedules?
+:PROPERTIES:
+:DEADLINE: <2026-04-15 Wed>
+:END:
+
+* TODO
+** pay taxes 
+:PROPERTIES:
+:DEADLINE: <2026-04-15 Wed>
+:END:
+** 
