@@ -342,15 +342,66 @@ header h1 {
   padding-bottom: 48px;
 }
 
-/* Detail pane */
+/* Detail pane — drawer layout */
 .detail-pane {
-  width: 320px;
+  width: 360px;
   flex-shrink: 0;
-  border-left: 1px solid var(--border);
-  padding-left: 24px;
   position: sticky;
   top: 32px;
   align-self: flex-start;
+  height: calc(100vh - 64px);
+  display: flex;
+  align-items: stretch;
+  transition: width 0.2s ease;
+  overflow: hidden;
+}
+
+.detail-pane.collapsed {
+  width: 16px;
+}
+
+.detail-gripper {
+  width: 16px;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  padding: 0;
+  font-family: inherit;
+}
+
+.detail-gripper:hover {
+  color: var(--text);
+}
+
+.detail-gripper-icon {
+  font-size: 18px;
+  line-height: 1;
+  padding: 14px 3px;
+  border-radius: 4px;
+  background: var(--focused-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.detail-gripper:hover .detail-gripper-icon {
+  background: var(--bg);
+  border-color: var(--bullet-active);
+  color: var(--bullet-active);
+}
+
+.detail-content {
+  flex: 1;
+  min-width: 0;
+  padding-left: 20px;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .detail-empty {
@@ -444,7 +495,7 @@ header h1 {
 /* Node row */
 .node-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   padding: 1px 0;
   border-radius: 3px;
   min-height: 30px;
@@ -457,7 +508,7 @@ header h1 {
 /* Bullet */
 .bullet {
   width: 16px;
-  height: 16px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -495,6 +546,7 @@ header h1 {
   line-height: 1.4;
   min-width: 16px;
   text-align: center;
+  margin-top: 7px;
 }
 
 .status-none {
@@ -525,6 +577,7 @@ header h1 {
 /* Title */
 .node-title {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
   color: var(--text);
@@ -534,6 +587,10 @@ header h1 {
   outline: none;
   line-height: 1.5;
   caret-color: var(--caret);
+  resize: none;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .node-title::placeholder {

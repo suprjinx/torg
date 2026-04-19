@@ -88,6 +88,25 @@ function PreambleRow({ focused, dispatch, inputRefs }) {
 function OutlineNode({ node, focusedId, dispatch, inputRefs, depth }) {
   const isFocused = focusedId === node.id;
   const hasChildren = node.children?.length > 0;
+  const titleRef = useRef(null);
+
+  useEffect(() => {
+    const ta = titleRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = ta.scrollHeight + "px";
+  }, [node.title]);
+
+  useEffect(() => {
+    const ta = titleRef.current;
+    if (!ta || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      ta.style.height = "auto";
+      ta.style.height = ta.scrollHeight + "px";
+    });
+    ro.observe(ta);
+    return () => ro.disconnect();
+  }, []);
 
   return html`
     <div>
@@ -109,8 +128,9 @@ function OutlineNode({ node, focusedId, dispatch, inputRefs, depth }) {
                 onClick=${(e) => { e.stopPropagation(); dispatch(node.id, "cycle-status"); }}
                 title="Click to set status"></span>
         `}
-        <input
-          ref=${(el) => { if (el) inputRefs.current[node.id] = el; }}
+        <textarea
+          rows=${1}
+          ref=${(el) => { titleRef.current = el; if (el) inputRefs.current[node.id] = el; }}
           className=${"node-title" + (node.status === "DONE" ? " done" : "")}
           value=${node.title}
           placeholder=""
@@ -174,7 +194,7 @@ function PropertiesEditor({ nodeId, properties, dispatch }) {
   `;
 }
 
-function DetailPane({ node, isPreamble, dispatch, inputRefs, bodyTextareaRef }) {
+function DetailPane({ node, isPreamble, dispatch, inputRefs, bodyTextareaRef, collapsed, onToggleCollapsed }) {
   const [bodyText, setBodyText] = useState(isPreamble ? (node?.body || "") : (node?.body || ""));
   const localRef = useRef(null);
 
@@ -183,12 +203,17 @@ function DetailPane({ node, isPreamble, dispatch, inputRefs, bodyTextareaRef }) 
     if (ta) { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; }
   }, [bodyText]);
 
-  if (!node && !isPreamble) {
-    return html`<div className="detail-pane"><div className="detail-empty">Select an item to see details</div></div>`;
-  }
+  const gripper = html`
+    <button className="detail-gripper" onClick=${onToggleCollapsed}
+            title=${collapsed ? "Show details" : "Hide details"}
+            aria-label=${collapsed ? "Show details" : "Hide details"}>
+      <span className="detail-gripper-icon">${collapsed ? "\u2039" : "\u203A"}</span>
+    </button>
+  `;
 
-  return html`
-    <div className="detail-pane">
+  const inner = (!node && !isPreamble)
+    ? html`<div className="detail-empty">Select an item to see details</div>`
+    : html`
       <div className="detail-header">${isPreamble ? "Preamble" : (node?.title || "Untitled")}</div>
       <div className="detail-section">
         <label className="detail-label">${isPreamble ? "Content" : "Body"}</label>
@@ -227,6 +252,12 @@ function DetailPane({ node, isPreamble, dispatch, inputRefs, bodyTextareaRef }) 
           <${PropertiesEditor} nodeId=${node.id} properties=${node.properties} dispatch=${dispatch} />
         </div>
       `}
+    `;
+
+  return html`
+    <div className=${"detail-pane" + (collapsed ? " collapsed" : "")}>
+      ${gripper}
+      <div className="detail-content" aria-hidden=${collapsed}>${inner}</div>
     </div>
   `;
 }
@@ -344,6 +375,16 @@ function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [syncStatus, setSyncStatus] = useState(SYNC_SAVED);
   const [view, setView] = useState("outline");
+  const [detailCollapsed, setDetailCollapsed] = useState(() => {
+    try { return localStorage.getItem("torg.detailCollapsed") === "1"; } catch { return false; }
+  });
+  const toggleDetailCollapsed = useCallback(() => {
+    setDetailCollapsed((v) => {
+      const next = !v;
+      try { localStorage.setItem("torg.detailCollapsed", next ? "1" : "0"); } catch {}
+      return next;
+    });
+  }, []);
   const pendingFocusRef = useRef(null);
   const inputRefs = useRef({});
   const bodyTextareaRef = useRef(null);
@@ -590,7 +631,8 @@ function App() {
           </div>
         `}
         <${DetailPane} key=${detailKey} node=${detailNode} isPreamble=${isPreambleFocused}
-          dispatch=${dispatch} inputRefs=${inputRefs} bodyTextareaRef=${bodyTextareaRef} />
+          dispatch=${dispatch} inputRefs=${inputRefs} bodyTextareaRef=${bodyTextareaRef}
+          collapsed=${detailCollapsed} onToggleCollapsed=${toggleDetailCollapsed} />
       </div>
       <${Hints} />
     </div>
