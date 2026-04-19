@@ -62,4 +62,4 @@ I have multiple lines
 :PROPERTIES:
 :DEADLINE: <2026-04-15 Wed>
 :END:
-** 
+** whaat happens with really long lines? I need to make sure I'm wrapping correctly. so let's go! next line that's not great but okay now what happens?
