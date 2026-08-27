@@ -391,8 +391,8 @@ function handleKey(e, id, dispatch, { structural = true } = {}) {
   }
   if (key === "ArrowUp")   { e.preventDefault(); dispatch(id, "nav-up"); return; }
   if (key === "ArrowDown") { e.preventDefault(); dispatch(id, "nav-down"); return; }
+  if (key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); dispatch(id, "set-status", "DONE"); return; }
   if (key === "Enter" && shift) { e.preventDefault(); dispatch(id, "focus-body"); return; }
-  if (key === "Backspace" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); dispatch(id, "set-status", "DONE"); return; }
   if (key === "Enter") { e.preventDefault(); if (structural) dispatch(id, "new-sibling"); return; }
   if (structural && key === "Backspace" && e.target.value === "") { e.preventDefault(); dispatch(id, "delete"); return; }
 }
@@ -883,7 +883,7 @@ function HelpPanel({ onClose }) {
             <${HelpRow} keys="Alt + 1\u20139" desc="Fold to level N" />
           <//>
           <${HelpSection} title="Status">
-            <${HelpRow} keys="Ctrl + Backspace" desc="Mark item DONE" />
+            <${HelpRow} keys="Ctrl + Enter" desc="Mark item DONE" />
             <${HelpRow} keys="Click badge" desc="Cycle none \u2192 TODO \u2192 DONE" />
             <${HelpRow} keys="Details pane" desc="Set status directly (Shift + Enter)" />
           <//>
