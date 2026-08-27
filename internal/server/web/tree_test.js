@@ -340,6 +340,44 @@ test("nextStatus: handles undefined", () => {
   assertEqual(tree.nextStatus(undefined), "TODO");
 });
 
+// setStatus
+test("setStatus: sets TODO on an item with no status", () => {
+  const t = [node("a", "A"), node("b", "B")];
+  const result = tree.setStatus(t, "b", "TODO");
+  assertEqual(result[1].status, "TODO");
+  assertEqual(result[0].status, "");
+});
+
+test("setStatus: DONE lands on DONE from any prior status", () => {
+  for (const start of ["", "TODO", "DONE"]) {
+    const t = [{ ...node("a", "A"), status: start }];
+    assertEqual(tree.setStatus(t, "a", "DONE")[0].status, "DONE");
+  }
+});
+
+test("setStatus: clears status with empty string", () => {
+  const t = [{ ...node("a", "A"), status: "TODO" }];
+  assertEqual(tree.setStatus(t, "a", "")[0].status, "");
+});
+
+test("setStatus: ignores unknown status values", () => {
+  const t = [{ ...node("a", "A"), status: "TODO" }];
+  assertEqual(tree.setStatus(t, "a", "MAYBE")[0].status, "");
+});
+
+test("setStatus: updates nested node", () => {
+  const t = [node("a", "A", [node("a1", "A1")])];
+  const result = tree.setStatus(t, "a1", "TODO");
+  assertEqual(result[0].children[0].status, "TODO");
+});
+
+test("setStatus: immutable \u2014 original unchanged", () => {
+  const t = [node("a", "A")];
+  const result = tree.setStatus(t, "a", "DONE");
+  assertEqual(t[0].status, "");
+  assert(result !== t);
+});
+
 // --- Edge cases ---
 
 test("indent then outdent is identity", () => {

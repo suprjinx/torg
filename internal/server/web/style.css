@@ -880,6 +880,53 @@ header h1 {
 }
 
 /* Date input in detail pane */
+/* Status selector in the details pane */
+.detail-status {
+  display: flex;
+  gap: 6px;
+}
+
+.detail-status-btn {
+  flex: 1;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fafafa;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.detail-status-btn:hover:not(:disabled) {
+  border-color: var(--bullet);
+  color: var(--text);
+}
+
+.detail-status-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.detail-status-btn.active {
+  border-color: var(--bullet-active);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.detail-status-btn.active:nth-child(2) {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.detail-status-btn.active:nth-child(3) {
+  background: #d4edda;
+  color: #155724;
+}
+
 .detail-date {
   width: 100%;
   font-family: inherit;

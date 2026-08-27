@@ -279,6 +279,21 @@ function DetailPane({ node, isPreamble, dispatch, inputRefs, bodyTextareaRef, wi
     </div>
     ${!isPreamble && html`
       <div className="detail-section">
+        <label className="detail-label">Status</label>
+        <div className="detail-status">
+          ${tree.STATUS_CYCLE.map((s) => html`
+            <button key=${s || "none"}
+                    className=${"detail-status-btn" + ((node?.status || "") === s ? " active" : "")}
+                    disabled=${!node}
+                    onMouseDown=${(e) => e.preventDefault()}
+                    onClick=${() => node && dispatch(node.id, "set-status", s)}
+                    aria-pressed=${(node?.status || "") === s}>
+              ${s || "None"}
+            </button>
+          `)}
+        </div>
+      </div>
+      <div className="detail-section">
         <label className="detail-label">Due date</label>
         <input type="date" className="detail-date"
           value=${node ? tree.parseOrgDate(node.properties?.DEADLINE) : ""}
@@ -359,6 +374,7 @@ function handleKey(e, id, dispatch) {
   if (key === "ArrowDown") { e.preventDefault(); dispatch(id, "nav-down"); return; }
   if (key === "Enter" && shift) { e.preventDefault(); dispatch(id, "focus-body"); return; }
   if (key === "Enter") { e.preventDefault(); dispatch(id, "new-sibling"); return; }
+  if (key === "Backspace" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); dispatch(id, "set-status", "DONE"); return; }
   if (key === "Backspace" && e.target.value === "") { e.preventDefault(); dispatch(id, "delete"); return; }
 }
 
@@ -636,6 +652,8 @@ function App() {
     if (action === "change-body") { setNodes((p) => tree.updateNodeField(p, nodeId, "body", value)); markDirty(); return; }
     if (action === "update-properties") { setNodes((p) => tree.updateNodeField(p, nodeId, "properties", value)); markDirty(); return; }
 
+    if (action === "set-status") { setNodes((p) => tree.setStatus(p, nodeId, value)); markDirty(); return; }
+
     if (action === "cycle-status") {
       setNodes((p) => {
         const node = tree.findNode(p, nodeId);
@@ -830,6 +848,11 @@ function HelpPanel({ onClose }) {
           <${HelpSection} title="Folding">
             <${HelpRow} keys="Tab" desc="Fold / unfold children" />
             <${HelpRow} keys="Alt + 1\u20139" desc="Fold to level N" />
+          <//>
+          <${HelpSection} title="Status">
+            <${HelpRow} keys="Ctrl + Backspace" desc="Mark item DONE" />
+            <${HelpRow} keys="Click badge" desc="Cycle none \u2192 TODO \u2192 DONE" />
+            <${HelpRow} keys="Details pane" desc="Set status directly (Shift + Enter)" />
           <//>
           <${HelpSection} title="Other">
             <${HelpRow} keys="Ctrl + H" desc="Toggle this help" />

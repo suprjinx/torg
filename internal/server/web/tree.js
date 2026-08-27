@@ -203,6 +203,13 @@ export function nextStatus(current) {
   return STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length];
 }
 
+// Set a node's status outright ("" clears it). Unlike nextStatus this does not
+// depend on the current value, so DONE always lands on DONE.
+export function setStatus(nodes, nodeId, status) {
+  const next = STATUS_CYCLE.includes(status) ? status : "";
+  return updateNodeField(nodes, nodeId, "status", next);
+}
+
 // --- Fuzzy search ---
 
 export function fuzzyMatch(query, text) {
