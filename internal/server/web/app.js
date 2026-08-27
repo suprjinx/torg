@@ -404,13 +404,23 @@ const SYNC_SAVING = "saving";
 const SYNC_ERROR = "error";
 const SYNC_CONFLICT = "conflict";
 
+const SYNC_LABELS = {
+  [SYNC_SAVED]: "Saved", [SYNC_DIRTY]: "Unsaved changes",
+  [SYNC_SAVING]: "Saving\u2026", [SYNC_ERROR]: "Save failed",
+  [SYNC_CONFLICT]: "Conflict \u2014 reload",
+};
+
+// The widest label is rendered invisibly underneath the live one so the
+// indicator keeps a constant width and the header controls never shift.
+const SYNC_WIDEST = Object.values(SYNC_LABELS).reduce((a, b) => (b.length > a.length ? b : a), "");
+
 function SyncIndicator({ status }) {
-  const labels = {
-    [SYNC_SAVED]: "Saved", [SYNC_DIRTY]: "Unsaved changes",
-    [SYNC_SAVING]: "Saving\u2026", [SYNC_ERROR]: "Save failed",
-    [SYNC_CONFLICT]: "Conflict \u2014 reload",
-  };
-  return html`<span className=${"sync-indicator sync-" + status}>${labels[status] || ""}</span>`;
+  return html`
+    <span className=${"sync-indicator sync-" + status}>
+      <span className="sync-label">${SYNC_LABELS[status] || ""}</span>
+      <span className="sync-sizer" aria-hidden="true">${SYNC_WIDEST}</span>
+    </span>
+  `;
 }
 
 // --- File Picker ---

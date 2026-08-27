@@ -230,6 +230,19 @@ header h1 {
   padding: 2px 8px;
   border-radius: 3px;
   user-select: none;
+  display: grid;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Live label and sizer share one grid cell; the sizer reserves the width */
+.sync-indicator > span {
+  grid-area: 1 / 1;
+  text-align: right;
+}
+
+.sync-sizer {
+  visibility: hidden;
 }
 
 /* View toggle */
