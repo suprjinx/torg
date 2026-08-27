@@ -210,6 +210,28 @@ export function setStatus(nodes, nodeId, status) {
   return updateNodeField(nodes, nodeId, "status", next);
 }
 
+// --- Agenda ---
+
+// Flatten every node carrying a DEADLINE into a date-sorted list. Order here is
+// also the agenda's keyboard navigation order.
+export function collectDatedItems(nodes, ancestors = []) {
+  const items = [];
+  for (const n of nodes || []) {
+    const date = parseOrgDate(n.properties?.DEADLINE);
+    if (date) items.push({ id: n.id, title: n.title, date, status: n.status || "", ancestors });
+    if (n.children?.length > 0) {
+      items.push(...collectDatedItems(n.children, [...ancestors, n.title]));
+    }
+  }
+  return items;
+}
+
+export function agendaItems(nodes, query = "") {
+  let items = collectDatedItems(nodes);
+  if (query) items = items.filter((item) => fuzzyMatch(query, item.title));
+  return items.sort((a, b) => a.date.localeCompare(b.date));
+}
+
 // --- Fuzzy search ---
 
 export function fuzzyMatch(query, text) {

@@ -999,22 +999,58 @@ header h1 {
 .agenda-item {
   display: flex;
   flex-direction: column;
-  padding: 6px 8px;
+  padding: 4px 8px;
   border-radius: 4px;
-  cursor: pointer;
+  cursor: text;
   gap: 2px;
 }
 
-.agenda-item:hover {
+.agenda-item:hover,
+.agenda-item.focused {
   background: var(--focused-bg);
 }
 
+.agenda-item-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* Editable in place — mirrors .node-title so agenda rows behave like outline rows */
 .agenda-item-title {
-  font-size: 15px;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
   color: var(--text);
+  font-family: inherit;
+  font-size: 15px;
+  padding: 2px 0;
+  outline: none;
+  line-height: 1.5;
+  caret-color: var(--caret);
+  resize: none;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.agenda-item-title.done {
+  text-decoration: line-through;
+  color: var(--text-dim);
+}
+
+.agenda-item .status-badge {
+  margin-top: 5px;
+}
+
+.agenda-item:hover .status-none,
+.agenda-item.focused .status-none {
+  opacity: 0.5;
 }
 
 .agenda-item-path {
   font-size: 11px;
   color: var(--text-dim);
+  padding-left: 2px;
 }

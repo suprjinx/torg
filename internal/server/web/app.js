@@ -35,21 +35,6 @@ const api = {
 
 // --- Agenda helpers ---
 
-function collectDatedItems(nodes, ancestors = []) {
-  const items = [];
-  for (const n of nodes) {
-    const raw = n.properties?.DEADLINE;
-    const date = tree.parseOrgDate(raw);
-    if (date) {
-      items.push({ id: n.id, title: n.title, date, status: n.status, ancestors });
-    }
-    if (n.children?.length > 0) {
-      items.push(...collectDatedItems(n.children, [...ancestors, n.title]));
-    }
-  }
-  return items;
-}
-
 function formatDateDisplay(dateStr) {
   try {
     const d = new Date(dateStr + "T00:00:00");
@@ -324,11 +309,45 @@ function DetailPane({ node, isPreamble, dispatch, inputRefs, bodyTextareaRef, wi
   `;
 }
 
-function AgendaView({ nodes, onSelect, searchQuery }) {
-  let items = collectDatedItems(nodes);
-  if (searchQuery) items = items.filter((item) => tree.fuzzyMatch(searchQuery, item.title));
-  items.sort((a, b) => a.date.localeCompare(b.date));
+function AgendaItem({ item, focused, dispatch, inputRefs }) {
+  const titleRef = useRef(null);
 
+  useEffect(() => {
+    const ta = titleRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = ta.scrollHeight + "px";
+  }, [item.title]);
+
+  return html`
+    <div className=${"agenda-item" + (focused ? " focused" : "")}
+         onClick=${(e) => {
+           // Clicks on the row's padding focus the title; clicks in the title
+           // itself keep the caret where the user put it.
+           if (e.target.tagName !== "TEXTAREA") dispatch(item.id, "focus-outline");
+         }}>
+      <div className="agenda-item-main">
+        <span className=${"status-badge status-" + (item.status ? item.status.toLowerCase() : "none")}
+              onClick=${(e) => { e.stopPropagation(); dispatch(item.id, "cycle-status"); }}
+              title=${item.status ? "Click to change status" : "Click to set status"}>${item.status}</span>
+        <textarea
+          rows=${1}
+          ref=${(el) => { titleRef.current = el; if (el) inputRefs.current[item.id] = el; }}
+          className=${"agenda-item-title" + (item.status === "DONE" ? " done" : "")}
+          value=${item.title}
+          onFocus=${() => dispatch(item.id, "focus")}
+          onKeyDown=${(e) => handleKey(e, item.id, dispatch, { structural: false })}
+          onChange=${(e) => dispatch(item.id, "change", e.target.value)}
+        />
+      </div>
+      ${item.ancestors.length > 0 && html`
+        <span className="agenda-item-path">${item.ancestors.join(" \u203A ")}</span>
+      `}
+    </div>
+  `;
+}
+
+function AgendaView({ items, focusedId, dispatch, inputRefs, searchQuery }) {
   if (items.length === 0) {
     return html`<div className="agenda-empty">${searchQuery ? "No matches" : "No items with due dates"}</div>`;
   }
@@ -350,12 +369,8 @@ function AgendaView({ nodes, onSelect, searchQuery }) {
             ${isOverdue(g.date) && html`<span className="agenda-badge overdue">overdue</span>`}
           </div>
           ${g.items.map((item) => html`
-            <div className="agenda-item" key=${item.id} onClick=${() => onSelect(item.id)}>
-              <span className="agenda-item-title">${item.title || "Untitled"}</span>
-              ${item.ancestors.length > 0 && html`
-                <span className="agenda-item-path">${item.ancestors.join(" \u203A ")}</span>
-              `}
-            </div>
+            <${AgendaItem} key=${item.id} item=${item} focused=${focusedId === item.id}
+                           dispatch=${dispatch} inputRefs=${inputRefs} />
           `)}
         </div>
       `)}
@@ -363,19 +378,23 @@ function AgendaView({ nodes, onSelect, searchQuery }) {
   `;
 }
 
-function handleKey(e, id, dispatch) {
+// structural: false disables tree-shape edits (agenda view, where row order is
+// by date rather than document position).
+function handleKey(e, id, dispatch, { structural = true } = {}) {
   const alt = e.altKey, shift = e.shiftKey, key = e.key;
-  if (alt && key === "ArrowUp")    { e.preventDefault(); dispatch(id, "move-up"); return; }
-  if (alt && key === "ArrowDown")  { e.preventDefault(); dispatch(id, "move-down"); return; }
-  if (alt && key === "ArrowRight") { e.preventDefault(); dispatch(id, "indent"); return; }
-  if (alt && key === "ArrowLeft")  { e.preventDefault(); dispatch(id, "outdent"); return; }
-  if (key === "Tab") { e.preventDefault(); dispatch(id, "toggle"); return; }
+  if (structural) {
+    if (alt && key === "ArrowUp")    { e.preventDefault(); dispatch(id, "move-up"); return; }
+    if (alt && key === "ArrowDown")  { e.preventDefault(); dispatch(id, "move-down"); return; }
+    if (alt && key === "ArrowRight") { e.preventDefault(); dispatch(id, "indent"); return; }
+    if (alt && key === "ArrowLeft")  { e.preventDefault(); dispatch(id, "outdent"); return; }
+    if (key === "Tab") { e.preventDefault(); dispatch(id, "toggle"); return; }
+  }
   if (key === "ArrowUp")   { e.preventDefault(); dispatch(id, "nav-up"); return; }
   if (key === "ArrowDown") { e.preventDefault(); dispatch(id, "nav-down"); return; }
   if (key === "Enter" && shift) { e.preventDefault(); dispatch(id, "focus-body"); return; }
-  if (key === "Enter") { e.preventDefault(); dispatch(id, "new-sibling"); return; }
   if (key === "Backspace" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); dispatch(id, "set-status", "DONE"); return; }
-  if (key === "Backspace" && e.target.value === "") { e.preventDefault(); dispatch(id, "delete"); return; }
+  if (key === "Enter") { e.preventDefault(); if (structural) dispatch(id, "new-sibling"); return; }
+  if (structural && key === "Backspace" && e.target.value === "") { e.preventDefault(); dispatch(id, "delete"); return; }
 }
 
 // --- Sync status ---
@@ -473,12 +492,18 @@ function App() {
   const dirtyRef = useRef(false);
   const nodesRef = useRef(null);
   const visibleNodesRef = useRef(null);
+  const navOrderRef = useRef(null);
   const preambleRef = useRef("");
   const hashRef = useRef("");
   const currentFileRef = useRef(null);
 
   const visibleNodes = useMemo(
     () => searchQuery && nodes ? tree.filterTree(nodes, searchQuery) : nodes,
+    [nodes, searchQuery]
+  );
+
+  const agendaItems = useMemo(
+    () => nodes ? tree.agendaItems(nodes, searchQuery) : [],
     [nodes, searchQuery]
   );
 
@@ -607,16 +632,22 @@ function App() {
     return () => window.removeEventListener("beforeunload", handler);
   }, []);
 
-  const handleAgendaSelect = useCallback((itemId) => {
-    setView("outline");
-    setNodes((prev) => tree.uncollapseToNode(prev, itemId));
-    requestAnimationFrame(() => focusNode(itemId));
+  // Switching back to the outline reveals whatever is focused in the agenda
+  const changeView = useCallback((next) => {
+    setView(next);
+    const id = focusedIdRef.current;
+    if (next === "outline" && id && id !== "preamble") {
+      setNodes((prev) => prev ? tree.uncollapseToNode(prev, id) : prev);
+      requestAnimationFrame(() => focusNode(id));
+    }
   }, [focusNode]);
 
   // Dispatch: all operations are local state mutations
   const dispatch = useCallback((nodeId, action, value) => {
     const navTree = visibleNodesRef.current || nodesRef.current || [];
-    const flat = [{ id: "preamble" }, ...tree.flattenVisible(navTree)];
+    const flat = navOrderRef.current
+      ? navOrderRef.current.map((id) => ({ id }))
+      : [{ id: "preamble" }, ...tree.flattenVisible(navTree)];
     const idx = flat.findIndex((n) => n.id === nodeId);
 
     if (action === "focus") {
@@ -715,11 +746,12 @@ function App() {
   const detailNode = isPreambleFocused ? { body: preamble } : focusedNode;
   const detailKey = isPreambleFocused ? "preamble" : focusedId;
   visibleNodesRef.current = visibleNodes;
+  navOrderRef.current = view === "agenda" ? agendaItems.map((i) => i.id) : null;
 
   return html`
     <div className="app-root">
       <${Header} onHelp=${() => setShowHelp(true)} syncStatus=${syncStatus}
-                  view=${view} setView=${setView} currentFile=${currentFile}
+                  view=${view} setView=${changeView} currentFile=${currentFile}
                   searchQuery=${searchQuery} setSearchQuery=${setSearchQuery}
                   searchInputRef=${searchInputRef}
                   detailVisible=${detailVisible} detailPinned=${detailPinned}
@@ -747,7 +779,8 @@ function App() {
         `}
         ${view === "agenda" && html`
           <div className="outline-pane">
-            <${AgendaView} nodes=${nodes} onSelect=${handleAgendaSelect} searchQuery=${searchQuery} />
+            <${AgendaView} items=${agendaItems} focusedId=${focusedId} dispatch=${dispatch}
+                           inputRefs=${inputRefs} searchQuery=${searchQuery} />
           </div>
         `}
         <${DetailPane} key=${detailKey} node=${detailNode} isPreamble=${isPreambleFocused}

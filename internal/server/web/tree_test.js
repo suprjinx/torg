@@ -378,6 +378,59 @@ test("setStatus: immutable \u2014 original unchanged", () => {
   assert(result !== t);
 });
 
+// collectDatedItems / agendaItems
+function dated(id, title, date, status = "", children = []) {
+  const n = node(id, title, children);
+  n.properties = { DEADLINE: `<${date} Thu>` };
+  n.status = status;
+  return n;
+}
+
+test("collectDatedItems: only returns nodes with a DEADLINE", () => {
+  const t = [dated("a", "A", "2026-01-02"), node("b", "B")];
+  const items = tree.collectDatedItems(t);
+  assertEqual(items.length, 1);
+  assertEqual(items[0].id, "a");
+  assertEqual(items[0].date, "2026-01-02");
+});
+
+test("collectDatedItems: records ancestor titles for nested items", () => {
+  const t = [node("a", "A", [node("a1", "A1", [dated("a2", "A2", "2026-01-02")])])];
+  const items = tree.collectDatedItems(t);
+  assertEqual(items.length, 1);
+  assertEqual(items[0].ancestors, ["A", "A1"]);
+});
+
+test("collectDatedItems: includes items inside collapsed parents", () => {
+  const parent = node("a", "A", [dated("a1", "A1", "2026-01-02")]);
+  parent.collapsed = true;
+  assertEqual(tree.collectDatedItems([parent]).length, 1);
+});
+
+test("collectDatedItems: carries status through", () => {
+  const items = tree.collectDatedItems([dated("a", "A", "2026-01-02", "TODO")]);
+  assertEqual(items[0].status, "TODO");
+});
+
+test("agendaItems: sorts by date regardless of document order", () => {
+  const t = [dated("a", "A", "2026-03-01"), dated("b", "B", "2026-01-01"), dated("c", "C", "2026-02-01")];
+  assertEqual(tree.agendaItems(t).map((i) => i.id), ["b", "c", "a"]);
+});
+
+test("agendaItems: filters by fuzzy query", () => {
+  const t = [dated("a", "Groceries", "2026-01-01"), dated("b", "Taxes", "2026-01-02")];
+  assertEqual(tree.agendaItems(t, "tax").map((i) => i.id), ["b"]);
+});
+
+test("agendaItems: empty query keeps everything", () => {
+  const t = [dated("a", "A", "2026-01-01"), dated("b", "B", "2026-01-02")];
+  assertEqual(tree.agendaItems(t, "").length, 2);
+});
+
+test("agendaItems: no dated nodes yields empty list", () => {
+  assertEqual(tree.agendaItems([node("a", "A")]), []);
+});
+
 // --- Edge cases ---
 
 test("indent then outdent is identity", () => {
