@@ -699,7 +699,7 @@ function App() {
   visibleNodesRef.current = visibleNodes;
 
   return html`
-    <div>
+    <div className="app-root">
       <${Header} onHelp=${() => setShowHelp(true)} syncStatus=${syncStatus}
                   view=${view} setView=${setView} currentFile=${currentFile}
                   searchQuery=${searchQuery} setSearchQuery=${setSearchQuery}
