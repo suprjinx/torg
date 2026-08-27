@@ -74,12 +74,24 @@ header h1 {
 }
 
 /* File picker */
+.picker-layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .file-picker {
+  width: 100%;
   max-width: 400px;
-  margin: 48px auto;
+  margin: 48px auto 24px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .file-picker h2 {
+  flex-shrink: 0;
   font-size: 16px;
   font-weight: 600;
   color: var(--text);
@@ -87,7 +99,13 @@ header h1 {
 }
 
 .file-list {
+  flex: 1;
+  min-height: 0;
   margin-bottom: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 8px;
 }
 
 .file-item {
@@ -110,6 +128,7 @@ header h1 {
 }
 
 .file-create {
+  flex-shrink: 0;
   display: flex;
   gap: 8px;
   border-top: 1px solid var(--border);
@@ -431,32 +450,39 @@ header h1 {
 }
 
 /* Always-visible scrollbar so the thumb doubles as a position indicator */
-.outline-pane {
+.outline-pane,
+.file-list {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
 
-.outline-pane::-webkit-scrollbar {
+.outline-pane::-webkit-scrollbar,
+.file-list::-webkit-scrollbar {
   width: 10px;
 }
 
-.outline-pane::-webkit-scrollbar-track {
+.outline-pane::-webkit-scrollbar-track,
+.file-list::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.outline-pane::-webkit-scrollbar-thumb {
+.outline-pane::-webkit-scrollbar-thumb,
+.file-list::-webkit-scrollbar-thumb {
   background: #d8d8d8;
   border: 3px solid var(--bg);
   border-radius: 6px;
   min-height: 32px;
 }
 
-.outline-pane:hover::-webkit-scrollbar-thumb {
+.outline-pane:hover::-webkit-scrollbar-thumb,
+.file-list:hover::-webkit-scrollbar-thumb {
   background: var(--bullet);
 }
 
 .outline-pane::-webkit-scrollbar-thumb:hover,
-.outline-pane::-webkit-scrollbar-thumb:active {
+.outline-pane::-webkit-scrollbar-thumb:active,
+.file-list::-webkit-scrollbar-thumb:hover,
+.file-list::-webkit-scrollbar-thumb:active {
   background: var(--bullet-active);
 }
 

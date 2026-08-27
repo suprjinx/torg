@@ -681,7 +681,7 @@ function App() {
   // File picker (no file selected)
   if (!currentFile) {
     return html`
-      <div>
+      <div className="picker-layout">
         <${Header} onHelp=${() => setShowHelp(true)} syncStatus=${syncStatus}
                     view=${view} setView=${setView} currentFile=${null} />
         <${FilePicker} files=${files} onSelect=${loadFile} onCreate=${handleCreateFile} />
